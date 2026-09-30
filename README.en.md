@@ -103,18 +103,15 @@ ctest --test-dir build -C Release --output-on-failure
 
 ## Project documentation
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution workflow
-- [SECURITY.md](SECURITY.md) — vulnerability reporting and security model
 - [PRIVACY.md](PRIVACY.md) — local data and network requests
 - [SUPPORT.md](SUPPORT.md) — support scope
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — community expectations
 - [CHANGELOG.md](CHANGELOG.md) — project changes
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design and trust boundaries
 - [docs/RELEASING.md](docs/RELEASING.md) — release process
 
 ## Contributing
 
-Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+Issues and pull requests are welcome.
 
 For problems with the **contents of the domain list itself**, use the upstream repository: [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru).
 
