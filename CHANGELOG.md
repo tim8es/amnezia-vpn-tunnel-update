@@ -17,4 +17,4 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 - Deferred apply while Amnezia VPN is running.
 - Suspicious upstream shrink protection.
 - Cross-platform CI and package artifacts.
-- Open-source project documentation, issue forms, contribution and security policies.
+- Project documentation and issue forms.
