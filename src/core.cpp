@@ -530,7 +530,7 @@ UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
     QNetworkRequest request(QUrl(state.sourceUrl));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.1");
+    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.3");
     const bool skippedVersionPending =
         !state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256;
     if (!state.etag.isEmpty() && (respectSkipped || !skippedVersionPending))
