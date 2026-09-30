@@ -121,6 +121,14 @@ UpdateResult runNetworkUpdate(bool respectSkipped)
     return updater.updateFromNetwork(respectSkipped);
 }
 
+UpdateResult processFetchedList(const QByteArray &body, const QString &etag, bool respectSkipped)
+{
+    AmneziaSettings settings;
+    StateStore stateStore;
+    Updater updater(settings, stateStore);
+    return updater.updateFromBytes(body, Updater::isAmneziaRunning(), etag, respectSkipped);
+}
+
 UpdateResult markUpdateSkipped(const UpdateResult &available)
 {
     AmneziaSettings settings;
@@ -441,12 +449,7 @@ int main(int argc, char *argv[])
             completion(result);
         };
 
-        auto *watcher = new QFutureWatcher<UpdateResult>(&window);
-        QObject::connect(watcher, &QFutureWatcher<UpdateResult>::finished, &window,
-                         [&, watcher, finish]() {
-            const UpdateResult result = watcher->result();
-            watcher->deleteLater();
-
+        auto handleResult = [&, finish](const UpdateResult &result) {
             if (result.status != UpdateStatus::RestartRequired) {
                 finish(result);
                 return;
@@ -468,11 +471,56 @@ int main(int argc, char *argv[])
             restartWatcher->setFuture(QtConcurrent::run([result]() {
                 return restartAmneziaAndApply(result);
             }));
+        };
+
+        State fetchState;
+        QString stateError;
+        if (!stateStore.load(fetchState, stateError)) {
+            finish({UpdateStatus::Error, stateError, 0});
+            return;
+        }
+
+        const QString sourceUrl = fetchState.sourceUrl.isEmpty()
+            ? QString::fromLatin1(kDomainSourceUrl)
+            : fetchState.sourceUrl;
+        const bool skippedVersionPending =
+            !fetchState.skippedSha256.isEmpty()
+            && fetchState.skippedSha256 != fetchState.sourceSha256;
+        const QString requestEtag = skippedVersionPending ? QString() : fetchState.etag;
+
+        auto *fetcher = new NetworkFetcher(&window);
+        QObject::connect(fetcher, &NetworkFetcher::finished, &window,
+                         [&, fetcher, fetchState, handleResult]
+                         (bool ok, bool notModified, const QByteArray &body,
+                          const QString &responseEtag, const QString &error) {
+            fetcher->deleteLater();
+
+            if (!ok) {
+                handleResult({UpdateStatus::Error, error, 0});
+                return;
+            }
+
+            if (notModified) {
+                handleResult({UpdateStatus::Unchanged,
+                              QStringLiteral("The list is already up to date."),
+                              0, fetchState.sourceSha256,
+                              responseEtag.isEmpty() ? fetchState.etag : responseEtag});
+                return;
+            }
+
+            auto *processWatcher = new QFutureWatcher<UpdateResult>(&window);
+            QObject::connect(processWatcher, &QFutureWatcher<UpdateResult>::finished, &window,
+                             [processWatcher, handleResult]() {
+                const UpdateResult result = processWatcher->result();
+                processWatcher->deleteLater();
+                handleResult(result);
+            });
+            processWatcher->setFuture(QtConcurrent::run([body, responseEtag]() {
+                return processFetchedList(body, responseEtag, false);
+            }));
         });
 
-        watcher->setFuture(QtConcurrent::run([]() {
-            return runNetworkUpdate(false);
-        }));
+        fetcher->fetch(sourceUrl, requestEtag, 15000);
     };
 
     QObject::connect(sourceCombo, &QComboBox::currentIndexChanged, &window, [&](int) {
