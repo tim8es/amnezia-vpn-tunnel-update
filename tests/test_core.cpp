@@ -1,0 +1,298 @@
+#include <QtTest>
+
+#include "core.h"
+
+#include <QCryptographicHash>
+#include <QDir>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QFile>
+#include <QSettings>
+#include <QTemporaryDir>
+
+using namespace AmneziaUpdater;
+
+class UpdaterCoreTest : public QObject
+{
+    Q_OBJECT
+
+private:
+    static QByteArray listJson(std::initializer_list<QString> domains)
+    {
+        QJsonArray array;
+        for (const QString &domain : domains) {
+            QJsonObject o;
+            o.insert(QStringLiteral("hostname"), domain);
+            o.insert(QStringLiteral("ip"), QString());
+            array.append(o);
+        }
+        return QJsonDocument(array).toJson(QJsonDocument::Compact);
+    }
+
+    static void initializeSettings(const QString &path, const QVariantMap &sites = {})
+    {
+        QSettings s(path, QSettings::IniFormat);
+        s.setValue(QStringLiteral("Conf/routeMode"), 2);
+        s.setValue(QStringLiteral("Conf/sitesSplitTunnelingEnabled"), true);
+        s.setValue(QStringLiteral("Conf/ExceptSites"), sites);
+        s.sync();
+    }
+
+private slots:
+    void parseValidList()
+    {
+        ParsedList parsed;
+        QString error;
+        QVERIFY2(ListCodec::parse(listJson({QStringLiteral("example.ru"), QStringLiteral("bank.ru")}),
+                                  parsed, error), qPrintable(error));
+        QCOMPARE(parsed.sites.size(), 2);
+        QVERIFY(parsed.sites.contains(QStringLiteral("example.ru")));
+        QVERIFY(!parsed.sha256.isEmpty());
+    }
+
+    void parserRejectsBrokenAndEmptyInput()
+    {
+        ParsedList parsed;
+        QString error;
+        QVERIFY(!ListCodec::parse(QByteArrayLiteral("{broken"), parsed, error));
+        QVERIFY(!error.isEmpty());
+
+        error.clear();
+        QVERIFY(!ListCodec::parse(QByteArrayLiteral("[]"), parsed, error));
+        QVERIFY(error.contains(QStringLiteral("empty"), Qt::CaseInsensitive));
+    }
+
+    void parserMirrorsAmneziaHostnameRules()
+    {
+        const QByteArray json = R"([
+          {"hostname":"localhost","ip":""},
+          {"hostname":"valid.example","ip":""},
+          {"hostname":"10.0.0.0/8","ip":""}
+        ])";
+        ParsedList parsed;
+        QString error;
+        QVERIFY2(ListCodec::parse(json, parsed, error), qPrintable(error));
+        QVERIFY(!parsed.sites.contains(QStringLiteral("localhost")));
+        QVERIFY(parsed.sites.contains(QStringLiteral("valid.example")));
+        QVERIFY(parsed.sites.contains(QStringLiteral("10.0.0.0/8")));
+    }
+
+    void mergePreservesUserEntriesAndRemovesStaleManaged()
+    {
+        QVariantMap current;
+        current.insert(QStringLiteral("old.ru"), QStringList{QStringLiteral("1.2.3.4")});
+        current.insert(QStringLiteral("keep.ru"), QStringList{QStringLiteral("5.6.7.8")});
+        current.insert(QStringLiteral("my-company.ru"), QStringList{QStringLiteral("9.9.9.9")});
+
+        QMap<QString, QStringList> next;
+        next.insert(QStringLiteral("keep.ru"), {});
+        next.insert(QStringLiteral("new.ru"), {});
+
+        const QVariantMap merged =
+            ListCodec::merge(current,
+                             {QStringLiteral("old.ru"), QStringLiteral("keep.ru")},
+                             next);
+
+        QVERIFY(!merged.contains(QStringLiteral("old.ru")));
+        QVERIFY(merged.contains(QStringLiteral("new.ru")));
+        QVERIFY(merged.contains(QStringLiteral("my-company.ru")));
+        QCOMPARE(merged.value(QStringLiteral("keep.ru")).toStringList(),
+                 QStringList{QStringLiteral("5.6.7.8")});
+    }
+
+    void backupRoundTrip()
+    {
+        QVariantMap original;
+        original.insert(QStringLiteral("a.ru"),
+                        QStringList{QStringLiteral("1.1.1.1"), QStringLiteral("2.2.2.2")});
+        original.insert(QStringLiteral("custom.ru"), QStringList{});
+
+        const QByteArray encoded = ListCodec::settingsBackupJson(original);
+        QVariantMap decoded;
+        QString error;
+        QVERIFY2(ListCodec::settingsBackupFromJson(encoded, decoded, error), qPrintable(error));
+        QCOMPARE(decoded.value(QStringLiteral("a.ru")).toStringList(),
+                 original.value(QStringLiteral("a.ru")).toStringList());
+        QVERIFY(decoded.contains(QStringLiteral("custom.ru")));
+    }
+
+    void updatePreservesUserDomainAndCreatesBackup()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        QVariantMap current;
+        current.insert(QStringLiteral("old.ru"), QStringList{QStringLiteral("1.2.3.4")});
+        current.insert(QStringLiteral("personal.ru"), QStringList{QStringLiteral("8.8.8.8")});
+        initializeSettings(settingsPath, current);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        State state;
+        state.managedDomains = {QStringLiteral("old.ru")};
+        QString error;
+        QVERIFY2(store.save(state, error), qPrintable(error));
+
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+        const UpdateResult result =
+            updater.updateFromBytes(listJson({QStringLiteral("new.ru")}), false);
+
+        QCOMPARE(result.status, UpdateStatus::Updated);
+        const QVariantMap after = settings.exceptSites();
+        QVERIFY(!after.contains(QStringLiteral("old.ru")));
+        QVERIFY(after.contains(QStringLiteral("new.ru")));
+        QVERIFY(after.contains(QStringLiteral("personal.ru")));
+
+        const QStringList backups =
+            QDir(store.backupDir()).entryList({QStringLiteral("*.json")}, QDir::Files);
+        QCOMPARE(backups.size(), 1);
+    }
+
+    void unchangedHashDoesNotRewrite()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        initializeSettings(settingsPath);
+
+        const QByteArray source = listJson({QStringLiteral("same.ru")});
+        ParsedList parsed;
+        QString error;
+        QVERIFY(ListCodec::parse(source, parsed, error));
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        State state;
+        state.sourceSha256 = QString::fromLatin1(parsed.sha256);
+        state.managedDomains = {QStringLiteral("same.ru")};
+        QVERIFY(store.save(state, error));
+
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+        const UpdateResult result = updater.updateFromBytes(source, false);
+        QCOMPARE(result.status, UpdateStatus::Unchanged);
+        QVERIFY(!QDir(store.backupDir()).exists());
+    }
+
+    void runningAmneziaCreatesPendingWithoutWritingSettings()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        QVariantMap current;
+        current.insert(QStringLiteral("personal.ru"), QStringList{});
+        initializeSettings(settingsPath, current);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+
+        const UpdateResult result =
+            updater.updateFromBytes(listJson({QStringLiteral("new.ru")}), true);
+        QCOMPARE(result.status, UpdateStatus::Pending);
+        QVERIFY(QFile::exists(store.pendingPath()));
+        QVERIFY(!settings.exceptSites().contains(QStringLiteral("new.ru")));
+        QVERIFY(settings.exceptSites().contains(QStringLiteral("personal.ru")));
+    }
+
+    void pendingUpdateAppliesAfterAmneziaStops()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        initializeSettings(settingsPath);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+
+        QCOMPARE(updater.updateFromBytes(listJson({QStringLiteral("pending.ru")}), true).status,
+                 UpdateStatus::Pending);
+        QCOMPARE(updater.applyPendingIfPossible(false).status, UpdateStatus::Updated);
+        QVERIFY(settings.exceptSites().contains(QStringLiteral("pending.ru")));
+        QVERIFY(!QFile::exists(store.pendingPath()));
+
+        State state;
+        QString error;
+        QVERIFY(store.load(state, error));
+        QVERIFY(state.pendingSha256.isEmpty());
+        QVERIFY(!state.sourceSha256.isEmpty());
+    }
+
+    void suspiciousShrinkNeverTouchesSettings()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+
+        QVariantMap current;
+        State state;
+        for (int i = 0; i < 120; ++i) {
+            const QString domain = QStringLiteral("managed-%1.example").arg(i);
+            current.insert(domain, QStringList{});
+            state.managedDomains.append(domain);
+        }
+        current.insert(QStringLiteral("personal.example"), QStringList{});
+        initializeSettings(settingsPath, current);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        QString error;
+        QVERIFY2(store.save(state, error), qPrintable(error));
+
+        QJsonArray tiny;
+        for (int i = 0; i < 10; ++i) {
+            QJsonObject o;
+            o.insert(QStringLiteral("hostname"), QStringLiteral("new-%1.example").arg(i));
+            o.insert(QStringLiteral("ip"), QString());
+            tiny.append(o);
+        }
+
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+        const UpdateResult result =
+            updater.updateFromBytes(QJsonDocument(tiny).toJson(QJsonDocument::Compact), false);
+
+        QCOMPARE(result.status, UpdateStatus::Error);
+        QCOMPARE(settings.exceptSites(), current);
+        QVERIFY(!QDir(store.backupDir()).exists());
+    }
+
+    void invalidUpdateNeverTouchesSettings()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        QVariantMap current;
+        current.insert(QStringLiteral("personal.ru"), QStringList{});
+        initializeSettings(settingsPath, current);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+
+        const UpdateResult result = updater.updateFromBytes(QByteArrayLiteral("not-json"), false);
+        QCOMPARE(result.status, UpdateStatus::Error);
+        QCOMPARE(settings.exceptSites(), current);
+        QVERIFY(!QDir(store.backupDir()).exists());
+    }
+
+    void unknownAmneziaSettingsFailSafe()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("empty.ini"));
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+
+        const UpdateResult result =
+            updater.updateFromBytes(listJson({QStringLiteral("example.ru")}), false);
+        QCOMPARE(result.status, UpdateStatus::Error);
+        QVERIFY(!settings.exceptSites().contains(QStringLiteral("example.ru")));
+    }
+};
+
+QTEST_GUILESS_MAIN(UpdaterCoreTest)
+#include "test_core.moc"
