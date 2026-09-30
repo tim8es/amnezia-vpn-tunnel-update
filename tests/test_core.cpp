@@ -222,6 +222,12 @@ private slots:
             updater.updateFromBytes(first, true, QStringLiteral("etag-1"));
         QCOMPARE(same.status, UpdateStatus::Skipped);
 
+        const UpdateResult manualRetry =
+            updater.updateFromBytes(first, true, QStringLiteral("etag-1"), false);
+        QCOMPARE(manualRetry.status, UpdateStatus::RestartRequired);
+        QCOMPARE(manualRetry.sourceSha256, available.sourceSha256);
+        QVERIFY(!manualRetry.sourceJson.isEmpty());
+
         const UpdateResult newer =
             updater.updateFromBytes(listJson({QStringLiteral("second.ru")}), true, QStringLiteral("etag-2"));
         QCOMPARE(newer.status, UpdateStatus::RestartRequired);
