@@ -113,12 +113,12 @@ bool askToRestartAmnezia(QWidget *parent)
     return box.clickedButton() == restartButton;
 }
 
-UpdateResult runNetworkUpdate()
+UpdateResult runNetworkUpdate(bool respectSkipped)
 {
     AmneziaSettings settings;
     StateStore stateStore;
     Updater updater(settings, stateStore);
-    return updater.updateFromNetwork();
+    return updater.updateFromNetwork(respectSkipped);
 }
 
 UpdateResult markUpdateSkipped(const UpdateResult &available)
@@ -152,7 +152,7 @@ UpdateResult restartAmneziaAndApply(const UpdateResult &available)
     StateStore stateStore;
     Updater updater(settings, stateStore);
     UpdateResult result =
-        updater.updateFromBytes(available.sourceJson, false, available.etag);
+        updater.updateFromBytes(available.sourceJson, false, available.etag, false);
 
     QString restartError;
     if (!AmneziaProcess::startAfterRestart(restartTarget, restartError)) {
@@ -195,9 +195,9 @@ UpdateResult disableAutomaticUpdates()
     return {UpdateStatus::Updated, QStringLiteral("Автообновление выключено."), 0};
 }
 
-UpdateResult runUpdateWithPrompt(QWidget *parent)
+UpdateResult runUpdateWithPrompt(QWidget *parent, bool respectSkipped)
 {
-    UpdateResult result = runNetworkUpdate();
+    UpdateResult result = runNetworkUpdate(respectSkipped);
     if (result.status != UpdateStatus::RestartRequired)
         return result;
 
@@ -214,7 +214,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("tim8es"));
     QCoreApplication::setApplicationName(QStringLiteral("amnezia-vpn-tunnel-update"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.2"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.3"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -286,14 +286,14 @@ int main(int argc, char *argv[])
     }
 
     if (parser.isSet(updateOpt)) {
-        const UpdateResult result = runUpdateWithPrompt(nullptr);
+        const UpdateResult result = runUpdateWithPrompt(nullptr, parser.isSet(silentOpt));
         if (!parser.isSet(silentOpt) || result.status == UpdateStatus::Error)
             qInfo().noquote() << result.message;
         return statusExitCode(result.status);
     }
 
     if (parser.isSet(installOpt)) {
-        const UpdateResult result = runUpdateWithPrompt(nullptr);
+        const UpdateResult result = runUpdateWithPrompt(nullptr, false);
         if (result.status == UpdateStatus::Error) {
             qCritical().noquote() << result.message;
             return 1;
@@ -470,7 +470,9 @@ int main(int argc, char *argv[])
             }));
         });
 
-        watcher->setFuture(QtConcurrent::run(runNetworkUpdate));
+        watcher->setFuture(QtConcurrent::run([]() {
+            return runNetworkUpdate(false);
+        }));
     };
 
     QObject::connect(sourceCombo, &QComboBox::currentIndexChanged, &window, [&](int) {

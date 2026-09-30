@@ -104,8 +104,8 @@ public:
     static bool validateSourceUrl(const QString &url, QString &normalizedUrl, QString &error);
 
     UpdateResult updateFromBytes(const QByteArray &json, bool amneziaRunning,
-                                 const QString &etag = {});
-    UpdateResult updateFromNetwork(int timeoutMs = 20000);
+                                 const QString &etag = {}, bool respectSkipped = true);
+    UpdateResult updateFromNetwork(bool respectSkipped = true, int timeoutMs = 20000);
 
     static bool isAmneziaRunning();
 

@@ -6,6 +6,13 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 
 ## [Unreleased]
 
+### Fixed
+
+- Manual **Apply source** and **Update now** actions can retry a list version that was previously skipped.
+- Background six-hour checks still suppress a skipped SHA-256 until a newer list appears.
+- Manual retries bypass the skipped version's ETag cache so the validated JSON is available for an approved restart.
+- Windows Amnezia process detection now uses the native process API instead of parsing `tasklist` output.
+
 ## [0.2.2] - 2026-09-30
 
 ### Fixed
