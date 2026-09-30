@@ -523,7 +523,7 @@ UpdateResult Updater::updateFromNetwork(int timeoutMs)
     QNetworkRequest request(QUrl(state.sourceUrl));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2");
+    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.1");
     if (!state.etag.isEmpty())
         request.setRawHeader("If-None-Match", state.etag.toUtf8());
 
