@@ -10,6 +10,8 @@
 #include <QFile>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QProcess>
+#include <QCoreApplication>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -404,6 +406,29 @@ private slots:
         error.clear();
         QVERIFY2(updater.setSourceUrl(QStringLiteral("https://example.com/list.json"), error), qPrintable(error));
         QCOMPARE(updater.sourceUrl(), QStringLiteral("https://example.com/list.json"));
+    }
+
+    void windowsDetectsRunningAmneziaProcess()
+    {
+#ifdef Q_OS_WIN
+        const QString helper = QDir(QCoreApplication::applicationDirPath())
+                                   .filePath(QStringLiteral("AmneziaVPN.exe"));
+        QVERIFY2(QFile::exists(helper), qPrintable(helper));
+
+        QProcess process;
+        process.start(helper);
+        QVERIFY2(process.waitForStarted(3000), qPrintable(process.errorString()));
+
+        QTRY_VERIFY_WITH_TIMEOUT(Updater::isAmneziaRunning(), 3000);
+
+        process.terminate();
+        if (!process.waitForFinished(3000))
+            process.kill();
+        process.waitForFinished(3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!Updater::isAmneziaRunning(), 3000);
+#else
+        QSKIP("Windows-only process detection integration test");
+#endif
     }
 
     void networkFetcherReturns200ExactlyOnce()
