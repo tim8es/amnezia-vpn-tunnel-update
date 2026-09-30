@@ -1,17 +1,52 @@
-#include <QApplication>
-#include <QLabel>
-#include <QWidget>
+#define NOMINMAX
+#include <windows.h>
 
-int main(int argc, char *argv[])
+namespace {
+
+LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    QApplication app(argc, argv);
+    switch (message) {
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+    }
+}
 
-    QWidget window;
-    window.setWindowTitle(QStringLiteral("AmneziaVPN test process"));
-    auto *label = new QLabel(QStringLiteral("Test Amnezia process"), &window);
-    label->move(20, 20);
-    window.resize(240, 100);
-    window.show();
+} // namespace
 
-    return app.exec();
+int main()
+{
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+
+    WNDCLASSW windowClass{};
+    windowClass.lpfnWndProc = windowProc;
+    windowClass.hInstance = instance;
+    windowClass.lpszClassName = L"AmneziaVpnUpdaterTestWindow";
+
+    if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+        return 2;
+
+    const HWND window = CreateWindowExW(
+        0,
+        windowClass.lpszClassName,
+        L"AmneziaVPN test process",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 320, 160,
+        nullptr, nullptr, instance, nullptr);
+
+    if (!window)
+        return 3;
+
+    MSG message{};
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+
+    return 0;
 }
