@@ -47,7 +47,7 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --test-dir build -C Release --output-on-failure --verbose
 
       - name: Validate built-in upstream lists
         if: runner.os == 'Linux'
