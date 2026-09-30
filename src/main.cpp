@@ -180,6 +180,32 @@ UpdateResult restartAmneziaAndApply(const UpdateResult &available)
 }
 
 
+UpdateResult restartAmneziaCheckAndApply()
+{
+    QString restartTarget;
+    QString error;
+    if (!AmneziaProcess::stopForRestart(restartTarget, error))
+        return {UpdateStatus::Error, error, 0};
+
+    UpdateResult result = runNetworkUpdate(false);
+
+    QString restartError;
+    if (!AmneziaProcess::startAfterRestart(restartTarget, restartError)) {
+        if (result.status == UpdateStatus::Error) {
+            result.message += QStringLiteral("\n\nКроме того, не удалось снова запустить Amnezia VPN: %1")
+                                  .arg(restartError);
+            return result;
+        }
+        return {UpdateStatus::Error,
+                QStringLiteral("%1\n\nНе удалось снова запустить Amnezia VPN: %2")
+                    .arg(result.message, restartError),
+                result.managedCount};
+    }
+
+    return result;
+}
+
+
 UpdateResult enableAutomaticUpdates()
 {
     QString error;
@@ -454,13 +480,29 @@ int main(int argc, char *argv[])
         }
     };
 
-    std::optional<UpdateResult> pendingRestartResult;
-    std::function<void(const UpdateResult &)> pendingRestartFinish;
+    std::function<void()> pendingRestartAction;
+    std::function<void()> pendingSkipAction;
 
     const auto hideRestartPrompt = [&]() {
         restartPrompt->hide();
         restartNow->hide();
         skipRestart->hide();
+        pendingRestartAction = {};
+        pendingSkipAction = {};
+    };
+
+    const auto showRestartPrompt = [&](const QString &text,
+                                       std::function<void()> restartAction,
+                                       std::function<void()> skipAction) {
+        restartPrompt->setText(text);
+        pendingRestartAction = std::move(restartAction);
+        pendingSkipAction = std::move(skipAction);
+        operationStatus->setText(QStringLiteral("Требуется перезапуск Amnezia VPN."));
+        operationStatus->show();
+        restartPrompt->show();
+        restartNow->show();
+        skipRestart->show();
+        restartNow->setFocus(Qt::OtherFocusReason);
     };
 
     std::function<void(QPushButton *, const QString &,
@@ -483,15 +525,59 @@ int main(int argc, char *argv[])
                 return;
             }
 
-            operationStatus->setText(QStringLiteral("Требуется перезапуск Amnezia VPN."));
-            operationStatus->show();
-            pendingRestartResult = result;
-            pendingRestartFinish = finish;
-            restartPrompt->show();
-            restartNow->show();
-            skipRestart->show();
-            restartNow->setFocus(Qt::OtherFocusReason);
+            showRestartPrompt(
+                QStringLiteral("<b>Обнаружено обновление списка туннелирования для Amnezia VPN.</b><br><br>"
+                               "Для применения нового списка необходимо перезапустить Amnezia VPN. "
+                               "Текущее VPN-соединение будет временно прервано."),
+                [&, result, finish]() {
+                    hideRestartPrompt();
+                    operationStatus->setText(QStringLiteral("Перезапускаю Amnezia VPN…"));
+                    operationStatus->show();
+
+                    auto *restartWatcher = new QFutureWatcher<UpdateResult>(&window);
+                    QObject::connect(restartWatcher, &QFutureWatcher<UpdateResult>::finished, &window,
+                                     [restartWatcher, finish]() {
+                        const UpdateResult restarted = restartWatcher->result();
+                        restartWatcher->deleteLater();
+                        finish(restarted);
+                    });
+                    restartWatcher->setFuture(QtConcurrent::run([result]() {
+                        return restartAmneziaAndApply(result);
+                    }));
+                },
+                [&, result, finish]() {
+                    hideRestartPrompt();
+                    finish(markUpdateSkipped(result));
+                });
         };
+
+        if (Updater::isAmneziaRunning()) {
+            showRestartPrompt(
+                QStringLiteral("<b>Amnezia VPN запущена.</b><br><br>"
+                               "Для проверки и применения списка необходимо перезапустить Amnezia VPN. "
+                               "Текущее VPN-соединение будет временно прервано."),
+                [&, finish]() {
+                    hideRestartPrompt();
+                    operationStatus->setText(QStringLiteral("Закрываю Amnezia VPN и проверяю список…"));
+                    operationStatus->show();
+
+                    auto *restartWatcher = new QFutureWatcher<UpdateResult>(&window);
+                    QObject::connect(restartWatcher, &QFutureWatcher<UpdateResult>::finished, &window,
+                                     [restartWatcher, finish]() {
+                        const UpdateResult result = restartWatcher->result();
+                        restartWatcher->deleteLater();
+                        finish(result);
+                    });
+                    restartWatcher->setFuture(QtConcurrent::run(restartAmneziaCheckAndApply));
+                },
+                [&, finish]() {
+                    hideRestartPrompt();
+                    finish({UpdateStatus::Skipped,
+                            QStringLiteral("Обновление пропущено: Amnezia VPN оставлена запущенной."),
+                            0});
+                });
+            return;
+        }
 
         State fetchState;
         QString stateError;
@@ -544,40 +630,13 @@ int main(int argc, char *argv[])
     };
 
     QObject::connect(skipRestart, &QPushButton::clicked, &window, [&]() {
-        if (!pendingRestartResult || !pendingRestartFinish)
-            return;
-
-        const UpdateResult result = *pendingRestartResult;
-        const auto finish = pendingRestartFinish;
-        pendingRestartResult.reset();
-        pendingRestartFinish = {};
-        hideRestartPrompt();
-        finish(markUpdateSkipped(result));
+        if (pendingSkipAction)
+            pendingSkipAction();
     });
 
     QObject::connect(restartNow, &QPushButton::clicked, &window, [&]() {
-        if (!pendingRestartResult || !pendingRestartFinish)
-            return;
-
-        const UpdateResult result = *pendingRestartResult;
-        const auto finish = pendingRestartFinish;
-        pendingRestartResult.reset();
-        pendingRestartFinish = {};
-        hideRestartPrompt();
-
-        operationStatus->setText(QStringLiteral("Перезапускаю Amnezia VPN…"));
-        operationStatus->show();
-
-        auto *restartWatcher = new QFutureWatcher<UpdateResult>(&window);
-        QObject::connect(restartWatcher, &QFutureWatcher<UpdateResult>::finished, &window,
-                         [restartWatcher, finish]() {
-            const UpdateResult restarted = restartWatcher->result();
-            restartWatcher->deleteLater();
-            finish(restarted);
-        });
-        restartWatcher->setFuture(QtConcurrent::run([result]() {
-            return restartAmneziaAndApply(result);
-        }));
+        if (pendingRestartAction)
+            pendingRestartAction();
     });
 
     QObject::connect(sourceCombo, &QComboBox::currentIndexChanged, &window, [&](int) {
