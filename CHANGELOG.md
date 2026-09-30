@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-30
+
 ### Added
 
 - Selectable built-in sources: domain, IP Lite, and full IP/CIDR lists.
