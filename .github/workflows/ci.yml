@@ -93,7 +93,7 @@ jobs:
 
       - name: Upload Windows package
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: amnezia-vpn-tunnel-update-windows-x64
           path: amnezia-vpn-tunnel-update-windows-x64.zip
@@ -102,7 +102,7 @@ jobs:
 
       - name: Upload macOS package
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: amnezia-vpn-tunnel-update-macos
           path: amnezia-vpn-tunnel-update-macos.dmg
@@ -111,7 +111,7 @@ jobs:
 
       - name: Upload Linux package
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: amnezia-vpn-tunnel-update-linux-x86_64
           path: amnezia-vpn-tunnel-update-linux-x86_64.AppImage
