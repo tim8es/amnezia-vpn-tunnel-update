@@ -26,15 +26,19 @@
 
 **Amnezia VPN Tunnel Update** поддерживает список исключений split tunneling в актуальном состоянии автоматически.
 
-Текущий источник данных — публичный автообновляемый список:
+По умолчанию используется публичный автообновляемый список `amnezia.json`. В интерфейсе можно выбрать один из трёх готовых источников или подписаться на совместимый JSON по своей HTTPS-ссылке.
 
-`https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json`
+| Список | Содержимое | Для чего |
+| --- | --- | --- |
+| `amnezia.json` | 2000+ доменов и локальные зоны | Точечный обход известных сервисов |
+| `amnezia-ip-lite.json` | ~650 IPv4/CIDR-подсетей | Компактный IP-список |
+| `amnezia-ip.json` | 12 800+ IPv4/CIDR-подсетей | Максимальное IP-покрытие |
 
 Утилита не модифицирует Amnezia VPN, не устанавливает драйверы и не работает постоянным фоновым процессом.
 
 ## Как это работает
 
-1. Утилита скачивает новый `amnezia.json`.
+1. Утилита скачивает выбранный JSON-список.
 2. Проверяет формат и защитные условия.
 3. Сравнивает SHA-256 с уже применённой версией.
 4. Сохраняет пользовательские домены, не принадлежащие updater'у.
@@ -62,7 +66,10 @@
 
 1. Распакуйте архив.
 2. Запустите `amnezia-vpn-tunnel-update.exe`.
-3. Нажмите **«Включить автообновление»**.
+3. При необходимости выберите источник списка.
+4. Нажмите **«Включить автообновление»**.
+
+Эта же кнопка затем превращается в **«Выключить автообновление»**.
 
 Пока сборки не подписаны, SmartScreen может показать предупреждение.
 
@@ -72,7 +79,8 @@
 
 1. Откройте DMG.
 2. Запустите **Amnezia VPN Tunnel Update**.
-3. Нажмите **«Включить автообновление»**.
+3. При необходимости выберите источник списка.
+4. Нажмите **«Включить автообновление»**.
 
 Пока сборки не подписаны и не notarized, Gatekeeper может потребовать ручное подтверждение запуска.
 
@@ -90,6 +98,7 @@ chmod +x amnezia-vpn-tunnel-update-linux-x86_64.AppImage
 ```text
 amnezia-vpn-tunnel-update --install
 amnezia-vpn-tunnel-update --update --silent
+amnezia-vpn-tunnel-update --source https://example.com/list.json --update
 amnezia-vpn-tunnel-update --status
 amnezia-vpn-tunnel-update --uninstall
 amnezia-vpn-tunnel-update --validate-file amnezia.json
@@ -97,16 +106,16 @@ amnezia-vpn-tunnel-update --validate-file amnezia.json
 
 Без аргументов открывается GUI.
 
-## Пользовательские домены
+## Пользовательские записи
 
-Updater хранит идентичность доменов, которыми управляет сам:
+Updater хранит идентичность доменов и IP/CIDR-записей, которыми управляет сам:
 
 ```text
 user entries = current Amnezia entries - previous managed set
 result       = user entries + new managed set
 ```
 
-Поэтому обычные пользовательские исключения не должны исчезать после обновления upstream.
+Поэтому обычные пользовательские исключения не должны исчезать после обновления выбранного источника.
 
 Текущее ограничение модели: hostname является единицей владения. Если пользователь вручную изменил IP-список у hostname, который также управляется upstream, этот hostname всё равно может считаться updater-managed.
 
@@ -134,7 +143,7 @@ ctest --test-dir build -C Release --output-on-failure
 
 CI собирает и тестирует проект на Windows, macOS и Linux. Linux-job дополнительно скачивает текущий upstream `amnezia.json` и валидирует его реальным бинарником.
 
-Release workflow запускается на тегах `v*`, собирает платформенные пакеты и SHA-256 checksums. Процесс описан в [docs/RELEASING.md](docs/RELEASING.md).
+Release workflow запускается изменением `.github/RELEASE`: он проверяет версию, создаёт тег, собирает платформенные пакеты и SHA-256 checksums. Процесс описан в [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Документация проекта
 

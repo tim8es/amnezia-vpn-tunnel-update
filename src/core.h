@@ -11,8 +11,12 @@
 
 namespace AmneziaUpdater {
 
-inline constexpr const char *kSourceUrl =
+inline constexpr const char *kDomainSourceUrl =
     "https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json";
+inline constexpr const char *kIpLiteSourceUrl =
+    "https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia-ip-lite.json";
+inline constexpr const char *kIpFullSourceUrl =
+    "https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia-ip.json";
 
 struct ParsedList {
     QMap<QString, QStringList> sites;
@@ -20,10 +24,12 @@ struct ParsedList {
 };
 
 struct State {
+    QString sourceUrl;
     QString sourceSha256;
     QString etag;
     QStringList managedDomains;
     QString pendingSha256;
+    bool sourceTransitionPending = false;
 };
 
 enum class UpdateStatus {
@@ -90,6 +96,10 @@ public:
                      StateStore &stateStore,
                      QObject *parent = nullptr);
 
+    QString sourceUrl() const;
+    bool setSourceUrl(const QString &url, QString &error);
+    static bool validateSourceUrl(const QString &url, QString &normalizedUrl, QString &error);
+
     UpdateResult updateFromBytes(const QByteArray &json, bool amneziaRunning,
                                  const QString &etag = {});
     UpdateResult applyPendingIfPossible(bool amneziaRunning);
@@ -110,6 +120,7 @@ class Scheduler {
 public:
     static bool install(const QString &programPath, QString &error);
     static bool uninstall(QString &error);
+    static bool isInstalled();
     static QString description();
 };
 

@@ -26,15 +26,19 @@
 
 **Amnezia VPN Tunnel Update** automatically keeps the split-tunneling exclusion list up to date.
 
-The current data source is:
+The default source is the public auto-updating `amnezia.json` list. The GUI can switch between three built-in sources or subscribe to a compatible JSON list using a custom HTTPS URL.
 
-`https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json`
+| List | Contents | Use case |
+| --- | --- | --- |
+| `amnezia.json` | 2000+ domains and local zones | Targeted bypass for known services |
+| `amnezia-ip-lite.json` | ~650 IPv4/CIDR networks | Compact IP list |
+| `amnezia-ip.json` | 12,800+ IPv4/CIDR networks | Maximum IP coverage |
 
 The utility does not patch the Amnezia client, install drivers, or stay resident as a daemon.
 
 ## Update flow
 
-1. Fetch the latest `amnezia.json`.
+1. Fetch the selected JSON list.
 2. Parse and validate it.
 3. Compare its SHA-256 with the last applied source.
 4. Preserve entries not owned by the updater.
@@ -67,6 +71,7 @@ Development builds are currently unsigned, so Windows SmartScreen or macOS Gatek
 ```text
 amnezia-vpn-tunnel-update --install
 amnezia-vpn-tunnel-update --update --silent
+amnezia-vpn-tunnel-update --source https://example.com/list.json --update
 amnezia-vpn-tunnel-update --status
 amnezia-vpn-tunnel-update --uninstall
 amnezia-vpn-tunnel-update --validate-file amnezia.json
@@ -76,14 +81,14 @@ Running without arguments opens the GUI.
 
 ## User-owned entries
 
-The updater tracks the hostnames it manages:
+The updater tracks the domain and IP/CIDR entries it manages:
 
 ```text
 user entries = current Amnezia entries - previous managed set
 result       = user entries + new managed set
 ```
 
-This allows upstream removals to take effect while preserving unrelated user entries.
+This allows source-list removals to take effect while preserving unrelated user entries.
 
 Current limitation: hostname identity is the ownership boundary. Manual IP changes for a hostname that is also upstream-managed may still be treated as updater-managed.
 

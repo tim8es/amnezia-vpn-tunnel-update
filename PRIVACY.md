@@ -4,11 +4,9 @@ Amnezia VPN Tunnel Update is designed without analytics or telemetry.
 
 ## Network requests
 
-The updater makes a network request when checking for a new split-tunneling list. The current source is:
+The updater makes a network request when checking for a new split-tunneling list. The default sources are hosted on GitHub, and the user may configure a custom HTTPS JSON source.
 
-`https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json`
-
-Normal network metadata may therefore be visible to GitHub and network intermediaries according to their own policies.
+Normal network metadata is visible to the server hosting the selected source and to network intermediaries according to their own policies.
 
 ## Local data
 
@@ -16,9 +14,10 @@ The application reads the local Amnezia VPN settings needed to manage `Conf/Exce
 
 It also stores local updater state such as:
 
+- the selected source URL;
 - the last source SHA-256;
 - ETag;
-- updater-managed domain names;
+- updater-managed entries (domains or IPv4/CIDR networks);
 - pending-update checksum/data;
 - local backups created before settings changes.
 

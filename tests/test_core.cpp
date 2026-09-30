@@ -258,6 +258,130 @@ private slots:
         QVERIFY(!QDir(store.backupDir()).exists());
     }
 
+    void sourceDefaultsAndPersists()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        initializeSettings(settingsPath);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+
+        QCOMPARE(updater.sourceUrl(), QString::fromLatin1(kDomainSourceUrl));
+
+        QString error;
+        QVERIFY2(updater.setSourceUrl(QString::fromLatin1(kIpLiteSourceUrl), error), qPrintable(error));
+
+        State state;
+        QVERIFY2(store.load(state, error), qPrintable(error));
+        QCOMPARE(state.sourceUrl, QString::fromLatin1(kIpLiteSourceUrl));
+        QVERIFY(state.sourceTransitionPending);
+        QVERIFY(state.sourceSha256.isEmpty());
+        QVERIFY(state.etag.isEmpty());
+    }
+
+    void sourceChangeClearsPendingButKeepsManagedOwnership()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        initializeSettings(settingsPath);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        State state;
+        state.sourceUrl = QString::fromLatin1(kDomainSourceUrl);
+        state.sourceSha256 = QStringLiteral("old-hash");
+        state.etag = QStringLiteral("old-etag");
+        state.pendingSha256 = QStringLiteral("pending-hash");
+        state.managedDomains = {QStringLiteral("old.example")};
+        QString error;
+        QVERIFY2(store.save(state, error), qPrintable(error));
+        QVERIFY2(store.savePending(listJson({QStringLiteral("pending.example")}), error), qPrintable(error));
+
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+        QVERIFY2(updater.setSourceUrl(QString::fromLatin1(kIpFullSourceUrl), error), qPrintable(error));
+
+        State after;
+        QVERIFY2(store.load(after, error), qPrintable(error));
+        QCOMPARE(after.sourceUrl, QString::fromLatin1(kIpFullSourceUrl));
+        QCOMPARE(after.managedDomains, QStringList{QStringLiteral("old.example")});
+        QVERIFY(after.sourceSha256.isEmpty());
+        QVERIFY(after.etag.isEmpty());
+        QVERIFY(after.pendingSha256.isEmpty());
+        QVERIFY(after.sourceTransitionPending);
+        QVERIFY(!QFile::exists(store.pendingPath()));
+    }
+
+    void sourceTransitionReplacesManagedEntriesWithoutShrinkGuard()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+
+        QVariantMap current;
+        State state;
+        state.sourceUrl = QString::fromLatin1(kIpLiteSourceUrl);
+        state.sourceTransitionPending = true;
+        for (int i = 0; i < 120; ++i) {
+            const QString domain = QStringLiteral("old-%1.example").arg(i);
+            current.insert(domain, QStringList{});
+            state.managedDomains.append(domain);
+        }
+        current.insert(QStringLiteral("personal.example"), QStringList{});
+        initializeSettings(settingsPath, current);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        QString error;
+        QVERIFY2(store.save(state, error), qPrintable(error));
+
+        QJsonArray next;
+        for (int i = 0; i < 10; ++i) {
+            QJsonObject o;
+            o.insert(QStringLiteral("hostname"), QStringLiteral("10.%1.0.0/16").arg(i));
+            o.insert(QStringLiteral("ip"), QString());
+            next.append(o);
+        }
+
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+        const UpdateResult result =
+            updater.updateFromBytes(QJsonDocument(next).toJson(QJsonDocument::Compact), false);
+
+        QCOMPARE(result.status, UpdateStatus::Updated);
+        const QVariantMap after = settings.exceptSites();
+        QVERIFY(after.contains(QStringLiteral("personal.example")));
+        QVERIFY(after.contains(QStringLiteral("10.0.0.0/16")));
+        QVERIFY(!after.contains(QStringLiteral("old-0.example")));
+
+        State saved;
+        QVERIFY2(store.load(saved, error), qPrintable(error));
+        QVERIFY(!saved.sourceTransitionPending);
+        QCOMPARE(saved.managedDomains.size(), 10);
+    }
+
+    void customSourceRequiresHttps()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        initializeSettings(settingsPath);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+
+        QString error;
+        QVERIFY(!updater.setSourceUrl(QStringLiteral("http://example.com/list.json"), error));
+        QVERIFY(error.contains(QStringLiteral("HTTPS"), Qt::CaseInsensitive));
+
+        error.clear();
+        QVERIFY2(updater.setSourceUrl(QStringLiteral("https://example.com/list.json"), error), qPrintable(error));
+        QCOMPARE(updater.sourceUrl(), QStringLiteral("https://example.com/list.json"));
+    }
+
     void invalidUpdateNeverTouchesSettings()
     {
         QTemporaryDir temp;

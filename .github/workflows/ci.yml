@@ -49,13 +49,15 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Validate current upstream list
+      - name: Validate built-in upstream lists
         if: runner.os == 'Linux'
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          curl -fsSL "https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json" -o upstream-amnezia.json
-          ./build/amnezia-vpn-tunnel-update --validate-file upstream-amnezia.json
+          for LIST in amnezia.json amnezia-ip-lite.json amnezia-ip.json; do
+            curl -fsSL "https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/$LIST" -o "$LIST"
+            ./build/amnezia-vpn-tunnel-update --validate-file "$LIST"
+          done
 
       - name: Package Linux AppImage
         if: runner.os == 'Linux'

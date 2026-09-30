@@ -6,6 +6,14 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 
 ## [Unreleased]
 
+### Added
+
+- Selectable built-in sources: domain, IP Lite, and full IP/CIDR lists.
+- Custom HTTPS JSON subscriptions persisted for scheduled updates.
+- GUI control to disable previously enabled automatic updates.
+- Safe source switching that replaces updater-owned entries while preserving user entries.
+- CLI `--source <url>` option.
+
 ## [0.1.0] - 2026-09-30
 
 ### Added
