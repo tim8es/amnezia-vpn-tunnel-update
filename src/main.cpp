@@ -398,7 +398,7 @@ int main(int argc, char *argv[])
 
         auto *watcher = new QFutureWatcher<UpdateResult>(&window);
         QObject::connect(watcher, &QFutureWatcher<UpdateResult>::finished, &window,
-                         [&, watcher, finish]() {
+                         [&, watcher, finish, button]() {
             const UpdateResult result = watcher->result();
             watcher->deleteLater();
 
