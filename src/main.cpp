@@ -7,14 +7,16 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QFile>
+#include <QFutureWatcher>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QSignalBlocker>
-#include <QStandardPaths>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrent>
+
+#include <functional>
 
 using namespace AmneziaUpdater;
 
@@ -71,8 +73,8 @@ QString statusText(const State &state, const AmneziaSettings &settings)
     else
         lines << QStringLiteral("• Список ещё не синхронизирован");
 
-    if (!state.pendingSha256.isEmpty())
-        lines << QStringLiteral("• Есть обновление, ожидающее закрытия Amnezia VPN");
+    if (!state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256)
+        lines << QStringLiteral("• Последняя найденная версия списка пропущена");
 
     if (settings.isInitialized()) {
         if (settings.routeMode() == 2 && settings.splitTunnelingEnabled())
@@ -89,6 +91,95 @@ QString statusText(const State &state, const AmneziaSettings &settings)
     return lines.join('\n');
 }
 
+bool askToRestartAmnezia(QWidget *parent)
+{
+    QMessageBox box(parent);
+    box.setIcon(QMessageBox::Information);
+    box.setWindowTitle(QStringLiteral("Обновление списка туннелирования"));
+    box.setText(QStringLiteral("Обнаружено обновление списка туннелирования для Amnezia VPN."));
+    box.setInformativeText(
+        QStringLiteral("Для применения нового списка необходимо перезапустить Amnezia VPN. "
+                       "Текущее VPN-соединение будет временно прервано."));
+
+    auto *restartButton =
+        box.addButton(QStringLiteral("Перезапустить сейчас"), QMessageBox::AcceptRole);
+    box.addButton(QStringLiteral("Пропустить"), QMessageBox::RejectRole);
+    box.setDefaultButton(qobject_cast<QPushButton *>(restartButton));
+    box.exec();
+
+    return box.clickedButton() == restartButton;
+}
+
+UpdateResult runNetworkUpdate()
+{
+    AmneziaSettings settings;
+    StateStore stateStore;
+    Updater updater(settings, stateStore);
+    return updater.updateFromNetwork();
+}
+
+UpdateResult markUpdateSkipped(const UpdateResult &available)
+{
+    AmneziaSettings settings;
+    StateStore stateStore;
+    Updater updater(settings, stateStore);
+
+    QString error;
+    if (!updater.markSkipped(available.sourceSha256, available.etag, error))
+        return {UpdateStatus::Error, error, 0};
+
+    return {UpdateStatus::Skipped,
+            QStringLiteral("Эта версия списка пропущена."),
+            available.managedCount,
+            available.sourceSha256,
+            available.etag};
+}
+
+UpdateResult restartAmneziaAndApply()
+{
+    QString restartTarget;
+    QString error;
+    if (!AmneziaProcess::stopForRestart(restartTarget, error))
+        return {UpdateStatus::Error, error, 0};
+
+    UpdateResult result = runNetworkUpdate();
+
+    QString restartError;
+    const bool alreadyRunning = Updater::isAmneziaRunning();
+    if (!alreadyRunning && !AmneziaProcess::startAfterRestart(restartTarget, restartError)) {
+        if (result.status == UpdateStatus::Error) {
+            result.message += QStringLiteral("\n\nКроме того, не удалось снова запустить Amnezia VPN: %1")
+                                  .arg(restartError);
+            return result;
+        }
+        return {UpdateStatus::Error,
+                QStringLiteral("%1\n\nСписок обработан, но не удалось снова запустить Amnezia VPN: %2")
+                    .arg(result.message, restartError),
+                result.managedCount};
+    }
+
+    if (result.status == UpdateStatus::RestartRequired) {
+        return {UpdateStatus::Error,
+                QStringLiteral("Amnezia VPN снова запустилась до применения списка. "
+                               "Изменения не были записаны; повторите обновление."),
+                0};
+    }
+
+    return result;
+}
+
+UpdateResult runUpdateWithPrompt(QWidget *parent)
+{
+    UpdateResult result = runNetworkUpdate();
+    if (result.status != UpdateStatus::RestartRequired)
+        return result;
+
+    if (!askToRestartAmnezia(parent))
+        return markUpdateSkipped(result);
+
+    return restartAmneziaAndApply();
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -96,7 +187,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("tim8es"));
     QCoreApplication::setApplicationName(QStringLiteral("amnezia-vpn-tunnel-update"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.1"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -108,7 +199,7 @@ int main(int argc, char *argv[])
     const QCommandLineOption statusOpt(QStringLiteral("status"), QStringLiteral("Print updater status"));
     const QCommandLineOption installOpt(QStringLiteral("install"), QStringLiteral("Enable scheduled updates"));
     const QCommandLineOption uninstallOpt(QStringLiteral("uninstall"), QStringLiteral("Disable scheduled updates"));
-    const QCommandLineOption silentOpt(QStringLiteral("silent"), QStringLiteral("Do not show UI messages"));
+    const QCommandLineOption silentOpt(QStringLiteral("silent"), QStringLiteral("Suppress routine console output"));
     const QCommandLineOption sourceOpt(QStringLiteral("source"),
                                        QStringLiteral("Use and persist an HTTPS JSON source"),
                                        QStringLiteral("url"));
@@ -168,18 +259,19 @@ int main(int argc, char *argv[])
     }
 
     if (parser.isSet(updateOpt)) {
-        const UpdateResult result = updater.updateFromNetwork(Updater::isAmneziaRunning());
+        const UpdateResult result = runUpdateWithPrompt(nullptr);
         if (!parser.isSet(silentOpt) || result.status == UpdateStatus::Error)
             qInfo().noquote() << result.message;
         return statusExitCode(result.status);
     }
 
     if (parser.isSet(installOpt)) {
-        const UpdateResult result = updater.updateFromNetwork(Updater::isAmneziaRunning());
+        const UpdateResult result = runUpdateWithPrompt(nullptr);
         if (result.status == UpdateStatus::Error) {
             qCritical().noquote() << result.message;
             return 1;
         }
+
         QString error;
         QString installedProgram;
         if (!Installer::stageCurrentPackage(installedProgram, error)) {
@@ -280,6 +372,60 @@ int main(int argc, char *argv[])
                                 : QStringLiteral("Включить автообновление"));
     };
 
+    const auto setBusy = [&](bool busy) {
+        sourceCombo->setEnabled(!busy);
+        customUrl->setEnabled(!busy);
+        applySource->setEnabled(!busy);
+        updateNow->setEnabled(!busy);
+        autoUpdate->setEnabled(!busy);
+    };
+
+    std::function<void(QPushButton *, const QString &,
+                       std::function<void(const UpdateResult &)>)> runGuiUpdate;
+
+    runGuiUpdate = [&](QPushButton *button, const QString &busyText,
+                       std::function<void(const UpdateResult &)> completion) {
+        const QString originalText = button->text();
+        setBusy(true);
+        button->setText(busyText);
+
+        auto finish = [&, button, originalText, completion](const UpdateResult &result) {
+            button->setText(originalText);
+            setBusy(false);
+            refreshStatus();
+            completion(result);
+        };
+
+        auto *watcher = new QFutureWatcher<UpdateResult>(&window);
+        QObject::connect(watcher, &QFutureWatcher<UpdateResult>::finished, &window,
+                         [&, watcher, finish]() {
+            const UpdateResult result = watcher->result();
+            watcher->deleteLater();
+
+            if (result.status != UpdateStatus::RestartRequired) {
+                finish(result);
+                return;
+            }
+
+            if (!askToRestartAmnezia(&window)) {
+                finish(markUpdateSkipped(result));
+                return;
+            }
+
+            button->setText(QStringLiteral("Перезапускаю Amnezia VPN…"));
+            auto *restartWatcher = new QFutureWatcher<UpdateResult>(&window);
+            QObject::connect(restartWatcher, &QFutureWatcher<UpdateResult>::finished, &window,
+                             [restartWatcher, finish]() {
+                const UpdateResult restarted = restartWatcher->result();
+                restartWatcher->deleteLater();
+                finish(restarted);
+            });
+            restartWatcher->setFuture(QtConcurrent::run(restartAmneziaAndApply));
+        });
+
+        watcher->setFuture(QtConcurrent::run(runNetworkUpdate));
+    };
+
     QObject::connect(sourceCombo, &QComboBox::currentIndexChanged, &window, [&](int) {
         refreshSourceUi();
     });
@@ -288,36 +434,33 @@ int main(int argc, char *argv[])
         if (!persistSelectedSource())
             return;
 
-        applySource->setEnabled(false);
-        const UpdateResult result = updater.updateFromNetwork(Updater::isAmneziaRunning());
-        applySource->setEnabled(true);
-        refreshStatus();
-
-        if (result.status == UpdateStatus::Error)
-            QMessageBox::critical(&window, QStringLiteral("Ошибка"), result.message);
-        else
-            QMessageBox::information(&window, QStringLiteral("Источник применён"), result.message);
+        runGuiUpdate(applySource, QStringLiteral("Проверяю список…"),
+                     [&](const UpdateResult &result) {
+            if (result.status == UpdateStatus::Error) {
+                QMessageBox::critical(&window, QStringLiteral("Ошибка"), result.message);
+            } else if (result.status != UpdateStatus::Skipped) {
+                QMessageBox::information(&window, QStringLiteral("Источник применён"), result.message);
+            }
+        });
     });
 
     QObject::connect(updateNow, &QPushButton::clicked, &window, [&]() {
         if (!persistSelectedSource())
             return;
 
-        updateNow->setEnabled(false);
-        const UpdateResult result = updater.updateFromNetwork(Updater::isAmneziaRunning());
-        updateNow->setEnabled(true);
-        refreshStatus();
-
-        if (result.status == UpdateStatus::Error)
-            QMessageBox::critical(&window, QStringLiteral("Ошибка"), result.message);
-        else
-            QMessageBox::information(&window, QStringLiteral("Готово"), result.message);
+        runGuiUpdate(updateNow, QStringLiteral("Проверяю обновление…"),
+                     [&](const UpdateResult &result) {
+            if (result.status == UpdateStatus::Error) {
+                QMessageBox::critical(&window, QStringLiteral("Ошибка"), result.message);
+            } else if (result.status != UpdateStatus::Skipped) {
+                QMessageBox::information(&window, QStringLiteral("Готово"), result.message);
+            }
+        });
     });
 
     QObject::connect(autoUpdate, &QPushButton::clicked, &window, [&]() {
-        autoUpdate->setEnabled(false);
-
         if (Scheduler::isInstalled()) {
+            autoUpdate->setEnabled(false);
             QString error;
             if (!Scheduler::uninstall(error)) {
                 autoUpdate->setEnabled(true);
@@ -332,41 +475,34 @@ int main(int argc, char *argv[])
             return;
         }
 
-        if (!persistSelectedSource()) {
-            autoUpdate->setEnabled(true);
+        if (!persistSelectedSource())
             return;
-        }
 
-        const UpdateResult result = updater.updateFromNetwork(Updater::isAmneziaRunning());
-        if (result.status == UpdateStatus::Error) {
-            autoUpdate->setEnabled(true);
-            QMessageBox::critical(&window, QStringLiteral("Ошибка"), result.message);
-            return;
-        }
+        runGuiUpdate(autoUpdate, QStringLiteral("Включаю автообновление…"),
+                     [&](const UpdateResult &result) {
+            if (result.status == UpdateStatus::Error) {
+                QMessageBox::critical(&window, QStringLiteral("Ошибка"), result.message);
+                return;
+            }
 
-        QString error;
-        QString installedProgram;
-        if (!Installer::stageCurrentPackage(installedProgram, error)) {
-            autoUpdate->setEnabled(true);
-            QMessageBox::critical(&window, QStringLiteral("Ошибка"),
-                                  QStringLiteral("Список обновлён, но не удалось установить updater:\n%1")
-                                      .arg(error));
-            return;
-        }
-        if (!Scheduler::install(installedProgram, error)) {
-            autoUpdate->setEnabled(true);
-            QMessageBox::critical(&window, QStringLiteral("Ошибка"),
-                                  QStringLiteral("Список обновлён, но не удалось включить расписание:\n%1")
-                                      .arg(error));
-            return;
-        }
+            QString error;
+            QString installedProgram;
+            if (!Installer::stageCurrentPackage(installedProgram, error)) {
+                QMessageBox::critical(&window, QStringLiteral("Ошибка"),
+                                      QStringLiteral("Не удалось установить updater:\n%1").arg(error));
+                return;
+            }
+            if (!Scheduler::install(installedProgram, error)) {
+                QMessageBox::critical(&window, QStringLiteral("Ошибка"),
+                                      QStringLiteral("Не удалось включить расписание:\n%1").arg(error));
+                return;
+            }
 
-        autoUpdate->setEnabled(true);
-        refreshStatus();
-        QMessageBox::information(
-            &window, QStringLiteral("Готово"),
-            QStringLiteral("%1\n\nДальше выбранный список проверяется автоматически.")
-                .arg(result.message));
+            refreshStatus();
+            QMessageBox::information(
+                &window, QStringLiteral("Готово"),
+                QStringLiteral("Автообновление включено. Список проверяется каждые 6 часов."));
+        });
     });
 
     refreshSourceUi();
