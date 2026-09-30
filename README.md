@@ -126,7 +126,7 @@ result       = user entries + new managed set
 
 - CMake 3.21+;
 - C++17;
-- Qt 6.5+ — Core, Network, Widgets, Test.
+- Qt 6.5+ — Core, Network, Widgets, Concurrent, Test.
 
 ```bash
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
