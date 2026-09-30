@@ -214,7 +214,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("tim8es"));
     QCoreApplication::setApplicationName(QStringLiteral("amnezia-vpn-tunnel-update"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.1"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.2"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -443,7 +443,7 @@ int main(int argc, char *argv[])
 
         auto *watcher = new QFutureWatcher<UpdateResult>(&window);
         QObject::connect(watcher, &QFutureWatcher<UpdateResult>::finished, &window,
-                         [&, watcher, finish, button]() {
+                         [&, watcher, finish]() {
             const UpdateResult result = watcher->result();
             watcher->deleteLater();
 
