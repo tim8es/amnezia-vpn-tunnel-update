@@ -56,7 +56,8 @@ QString sourceDescription(int index)
     }
 }
 
-QString statusText(const State &state, const AmneziaSettings &settings)
+QString statusText(const State &state, const AmneziaSettings &settings,
+                   bool schedulerStateKnown, bool schedulerInstalled)
 {
     QStringList lines;
     lines << (settings.isInitialized()
@@ -83,7 +84,9 @@ QString statusText(const State &state, const AmneziaSettings &settings)
             lines << QStringLiteral("• Updater не меняет режим split tunneling автоматически");
     }
 
-    if (Scheduler::isInstalled())
+    if (!schedulerStateKnown)
+        lines << QStringLiteral("• Проверяю состояние автообновления…");
+    else if (schedulerInstalled)
         lines << QStringLiteral("✓ Автообновление включено: %1").arg(Scheduler::description());
     else
         lines << QStringLiteral("• Автообновление выключено");
@@ -167,6 +170,31 @@ UpdateResult restartAmneziaAndApply(const UpdateResult &available)
     return result;
 }
 
+
+UpdateResult enableAutomaticUpdates()
+{
+    QString error;
+    QString installedProgram;
+    if (!Installer::stageCurrentPackage(installedProgram, error))
+        return {UpdateStatus::Error, QStringLiteral("Не удалось установить updater:\n%1").arg(error), 0};
+
+    if (!Scheduler::install(installedProgram, error))
+        return {UpdateStatus::Error, QStringLiteral("Не удалось включить расписание:\n%1").arg(error), 0};
+
+    return {UpdateStatus::Updated,
+            QStringLiteral("Автообновление включено. Список проверяется каждые 6 часов."),
+            0};
+}
+
+UpdateResult disableAutomaticUpdates()
+{
+    QString error;
+    if (!Scheduler::uninstall(error))
+        return {UpdateStatus::Error, error, 0};
+
+    return {UpdateStatus::Updated, QStringLiteral("Автообновление выключено."), 0};
+}
+
 UpdateResult runUpdateWithPrompt(QWidget *parent)
 {
     UpdateResult result = runNetworkUpdate();
@@ -186,7 +214,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("tim8es"));
     QCoreApplication::setApplicationName(QStringLiteral("amnezia-vpn-tunnel-update"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.1"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.2"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -243,7 +271,7 @@ int main(int argc, char *argv[])
             qCritical().noquote() << error;
             return 1;
         }
-        qInfo().noquote() << statusText(state, settings);
+        qInfo().noquote() << statusText(state, settings, true, Scheduler::isInstalled());
         return 0;
     }
 
@@ -312,6 +340,9 @@ int main(int argc, char *argv[])
 
     auto *status = new QLabel;
     status->setWordWrap(true);
+    auto *operationStatus = new QLabel;
+    operationStatus->setWordWrap(true);
+    operationStatus->hide();
     auto *autoUpdate = new QPushButton;
     auto *updateNow = new QPushButton(QStringLiteral("Обновить сейчас"));
 
@@ -325,6 +356,7 @@ int main(int argc, char *argv[])
     layout->addWidget(applySource);
     layout->addSpacing(10);
     layout->addWidget(status);
+    layout->addWidget(operationStatus);
     layout->addSpacing(8);
     layout->addWidget(autoUpdate);
     layout->addWidget(updateNow);
@@ -358,25 +390,41 @@ int main(int argc, char *argv[])
         return true;
     };
 
+    bool operationBusy = false;
+    bool schedulerStateKnown = false;
+    bool schedulerInstalled = false;
+
     const auto refreshStatus = [&]() {
         State state;
         QString error;
         if (stateStore.load(state, error))
-            status->setText(statusText(state, settings));
+            status->setText(statusText(state, settings, schedulerStateKnown, schedulerInstalled));
         else
             status->setText(QStringLiteral("Ошибка: %1").arg(error));
 
-        autoUpdate->setText(Scheduler::isInstalled()
-                                ? QStringLiteral("Выключить автообновление")
-                                : QStringLiteral("Включить автообновление"));
+        if (!schedulerStateKnown)
+            autoUpdate->setText(QStringLiteral("Проверяю автообновление…"));
+        else
+            autoUpdate->setText(schedulerInstalled
+                                    ? QStringLiteral("Выключить автообновление")
+                                    : QStringLiteral("Включить автообновление"));
+
+        autoUpdate->setEnabled(!operationBusy && schedulerStateKnown);
     };
 
-    const auto setBusy = [&](bool busy) {
-        sourceCombo->setEnabled(!busy);
-        customUrl->setEnabled(!busy);
+    const auto setBusy = [&](bool busy, const QString &message = {}) {
+        operationBusy = busy;
         applySource->setEnabled(!busy);
         updateNow->setEnabled(!busy);
-        autoUpdate->setEnabled(!busy);
+        autoUpdate->setEnabled(!busy && schedulerStateKnown);
+
+        if (busy && !message.isEmpty()) {
+            operationStatus->setText(message);
+            operationStatus->show();
+        } else if (!busy) {
+            operationStatus->clear();
+            operationStatus->hide();
+        }
     };
 
     std::function<void(QPushButton *, const QString &,
@@ -384,12 +432,10 @@ int main(int argc, char *argv[])
 
     runGuiUpdate = [&](QPushButton *button, const QString &busyText,
                        std::function<void(const UpdateResult &)> completion) {
-        const QString originalText = button->text();
-        setBusy(true);
-        button->setText(busyText);
+        Q_UNUSED(button);
+        setBusy(true, busyText);
 
-        auto finish = [&, button, originalText, completion](const UpdateResult &result) {
-            button->setText(originalText);
+        auto finish = [&, completion](const UpdateResult &result) {
             setBusy(false);
             refreshStatus();
             completion(result);
@@ -397,7 +443,7 @@ int main(int argc, char *argv[])
 
         auto *watcher = new QFutureWatcher<UpdateResult>(&window);
         QObject::connect(watcher, &QFutureWatcher<UpdateResult>::finished, &window,
-                         [&, watcher, finish, button]() {
+                         [&, watcher, finish]() {
             const UpdateResult result = watcher->result();
             watcher->deleteLater();
 
@@ -411,7 +457,7 @@ int main(int argc, char *argv[])
                 return;
             }
 
-            button->setText(QStringLiteral("Перезапускаю Amnezia VPN…"));
+            operationStatus->setText(QStringLiteral("Перезапускаю Amnezia VPN…"));
             auto *restartWatcher = new QFutureWatcher<UpdateResult>(&window);
             QObject::connect(restartWatcher, &QFutureWatcher<UpdateResult>::finished, &window,
                              [restartWatcher, finish]() {
@@ -460,54 +506,76 @@ int main(int argc, char *argv[])
     });
 
     QObject::connect(autoUpdate, &QPushButton::clicked, &window, [&]() {
-        if (Scheduler::isInstalled()) {
-            autoUpdate->setEnabled(false);
-            QString error;
-            if (!Scheduler::uninstall(error)) {
-                autoUpdate->setEnabled(true);
-                QMessageBox::critical(&window, QStringLiteral("Ошибка"), error);
-                return;
-            }
+        if (!schedulerStateKnown || operationBusy)
+            return;
 
-            autoUpdate->setEnabled(true);
-            refreshStatus();
-            QMessageBox::information(&window, QStringLiteral("Готово"),
-                                     QStringLiteral("Автообновление выключено."));
+        if (schedulerInstalled) {
+            setBusy(true, QStringLiteral("Выключаю автообновление…"));
+            auto *watcher = new QFutureWatcher<UpdateResult>(&window);
+            QObject::connect(watcher, &QFutureWatcher<UpdateResult>::finished, &window, [&, watcher]() {
+                const UpdateResult result = watcher->result();
+                watcher->deleteLater();
+
+                if (result.status != UpdateStatus::Error)
+                    schedulerInstalled = false;
+
+                setBusy(false);
+                refreshStatus();
+
+                if (result.status == UpdateStatus::Error)
+                    QMessageBox::critical(&window, QStringLiteral("Ошибка"), result.message);
+                else
+                    QMessageBox::information(&window, QStringLiteral("Готово"), result.message);
+            });
+            watcher->setFuture(QtConcurrent::run(disableAutomaticUpdates));
             return;
         }
 
         if (!persistSelectedSource())
             return;
 
-        runGuiUpdate(autoUpdate, QStringLiteral("Включаю автообновление…"),
+        runGuiUpdate(autoUpdate, QStringLiteral("Проверяю список…"),
                      [&](const UpdateResult &result) {
             if (result.status == UpdateStatus::Error) {
                 QMessageBox::critical(&window, QStringLiteral("Ошибка"), result.message);
                 return;
             }
 
-            QString error;
-            QString installedProgram;
-            if (!Installer::stageCurrentPackage(installedProgram, error)) {
-                QMessageBox::critical(&window, QStringLiteral("Ошибка"),
-                                      QStringLiteral("Не удалось установить updater:\n%1").arg(error));
-                return;
-            }
-            if (!Scheduler::install(installedProgram, error)) {
-                QMessageBox::critical(&window, QStringLiteral("Ошибка"),
-                                      QStringLiteral("Не удалось включить расписание:\n%1").arg(error));
-                return;
-            }
+            setBusy(true, QStringLiteral("Включаю автообновление…"));
+            auto *watcher = new QFutureWatcher<UpdateResult>(&window);
+            QObject::connect(watcher, &QFutureWatcher<UpdateResult>::finished, &window, [&, watcher]() {
+                const UpdateResult installResult = watcher->result();
+                watcher->deleteLater();
 
-            refreshStatus();
-            QMessageBox::information(
-                &window, QStringLiteral("Готово"),
-                QStringLiteral("Автообновление включено. Список проверяется каждые 6 часов."));
+                if (installResult.status != UpdateStatus::Error)
+                    schedulerInstalled = true;
+
+                setBusy(false);
+                refreshStatus();
+
+                if (installResult.status == UpdateStatus::Error)
+                    QMessageBox::critical(&window, QStringLiteral("Ошибка"), installResult.message);
+                else
+                    QMessageBox::information(&window, QStringLiteral("Готово"), installResult.message);
+            });
+            watcher->setFuture(QtConcurrent::run(enableAutomaticUpdates));
         });
     });
 
     refreshSourceUi();
     refreshStatus();
+
+    auto *schedulerWatcher = new QFutureWatcher<bool>(&window);
+    QObject::connect(schedulerWatcher, &QFutureWatcher<bool>::finished, &window, [&, schedulerWatcher]() {
+        schedulerInstalled = schedulerWatcher->result();
+        schedulerStateKnown = true;
+        schedulerWatcher->deleteLater();
+        refreshStatus();
+    });
+    schedulerWatcher->setFuture(QtConcurrent::run([]() {
+        return Scheduler::isInstalled();
+    }));
+
     window.show();
     return app.exec();
 }

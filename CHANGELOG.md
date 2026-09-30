@@ -6,6 +6,12 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 
 ## [Unreleased]
 
+### Fixed
+
+- Kept the GUI responsive during update, source-apply, and scheduler operations.
+- Moved Windows scheduler status/install/uninstall checks out of the UI thread.
+- Replaced whole-form disabling with explicit operation status while only action buttons are locked.
+
 ## [0.2.1] - 2026-09-30
 
 ### Changed
