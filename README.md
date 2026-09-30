@@ -143,7 +143,7 @@ ctest --test-dir build -C Release --output-on-failure
 
 CI собирает и тестирует проект на Windows, macOS и Linux. Linux-job дополнительно скачивает текущий upstream `amnezia.json` и валидирует его реальным бинарником.
 
-Release workflow запускается на тегах `v*`, собирает платформенные пакеты и SHA-256 checksums. Процесс описан в [docs/RELEASING.md](docs/RELEASING.md).
+Release workflow запускается изменением `.github/RELEASE`: он проверяет версию, создаёт тег, собирает платформенные пакеты и SHA-256 checksums. Процесс описан в [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Документация проекта
 
