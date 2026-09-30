@@ -25,7 +25,6 @@ Commands/results:
 - [ ] Failure paths prefer leaving existing Amnezia settings unchanged.
 - [ ] User-managed domains remain preserved, or the ownership-model change is documented.
 - [ ] No new telemetry, privilege requirement, or remote service was introduced without documentation.
-- [ ] Security-sensitive changes are documented in `SECURITY.md` / architecture docs when relevant.
 
 ## User-facing changes
 
