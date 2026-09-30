@@ -32,7 +32,7 @@ if(BUILD_TESTING)
 
     if(WIN32)
         add_executable(AmneziaVPN tests/fake_amnezia.cpp)
-        target_link_libraries(AmneziaVPN PRIVATE Qt6::Core)
+        target_link_libraries(AmneziaVPN PRIVATE Qt6::Widgets)
         add_dependencies(amnezia-vpn-tunnel-update-tests AmneziaVPN)
     endif()
 endif()
