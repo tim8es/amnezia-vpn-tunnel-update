@@ -356,6 +356,67 @@ bool AmneziaSettings::splitTunnelingEnabled() const
     return m_settings->value(QStringLiteral("Conf/sitesSplitTunnelingEnabled"), false).toBool();
 }
 
+NetworkFetcher::NetworkFetcher(QObject *parent)
+    : QObject(parent)
+{
+}
+
+void NetworkFetcher::fetch(const QString &url, const QString &etag, int timeoutMs)
+{
+    QNetworkRequest request(QUrl(url));
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/gui");
+    if (!etag.isEmpty())
+        request.setRawHeader("If-None-Match", etag.toUtf8());
+
+    QNetworkReply *reply = m_manager.get(request);
+    auto *timer = new QTimer(reply);
+    timer->setSingleShot(true);
+
+    QObject::connect(timer, &QTimer::timeout, reply, [this, reply]() {
+        if (reply->isFinished())
+            return;
+        reply->setProperty("amneziaUpdaterTimedOut", true);
+        reply->abort();
+        emit finished(false, false, {}, {}, QStringLiteral("Download timed out."));
+    });
+
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, timer]() {
+        timer->stop();
+
+        if (reply->property("amneziaUpdaterTimedOut").toBool()) {
+            reply->deleteLater();
+            return;
+        }
+
+        const int httpStatus =
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+        if (httpStatus == 304) {
+            const QString responseEtag = QString::fromUtf8(reply->rawHeader("ETag"));
+            emit finished(true, true, {}, responseEtag, {});
+            reply->deleteLater();
+            return;
+        }
+
+        if (reply->error() != QNetworkReply::NoError || httpStatus != 200) {
+            const QString message = QStringLiteral("Download failed (HTTP %1): %2")
+                                        .arg(httpStatus).arg(reply->errorString());
+            emit finished(false, false, {}, {}, message);
+            reply->deleteLater();
+            return;
+        }
+
+        const QByteArray body = reply->readAll();
+        const QString responseEtag = QString::fromUtf8(reply->rawHeader("ETag"));
+        emit finished(true, false, body, responseEtag, {});
+        reply->deleteLater();
+    });
+
+    timer->start(timeoutMs);
+}
+
 Updater::Updater(AmneziaSettings &settings, StateStore &stateStore, QObject *parent)
     : QObject(parent), m_settings(settings), m_stateStore(stateStore)
 {
