@@ -104,7 +104,7 @@ public:
 
     UpdateResult updateFromBytes(const QByteArray &json, bool amneziaRunning,
                                  const QString &etag = {});
-    UpdateResult updateFromNetwork(bool amneziaRunning, int timeoutMs = 20000);
+    UpdateResult updateFromNetwork(int timeoutMs = 20000);
 
     static bool isAmneziaRunning();
 
