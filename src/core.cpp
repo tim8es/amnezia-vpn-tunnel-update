@@ -363,7 +363,7 @@ NetworkFetcher::NetworkFetcher(QObject *parent)
 
 void NetworkFetcher::fetch(const QString &url, const QString &etag, int timeoutMs)
 {
-    QNetworkRequest request(QUrl(url));
+    QNetworkRequest request{QUrl(url)};
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/gui");
