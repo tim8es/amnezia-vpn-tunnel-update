@@ -1,0 +1,6 @@
+build/
+AppDir/
+*.AppImage
+*.dmg
+*.zip
+.DS_Store
