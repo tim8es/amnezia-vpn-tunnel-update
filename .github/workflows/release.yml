@@ -22,13 +22,19 @@ jobs:
     timeout-minutes: 5
     outputs:
       tag: ${{ steps.release.outputs.tag }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      tag_exists: ${{ steps.release.outputs.tag_exists }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Resolve and verify release version
+      - name: Resolve release source
         id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -39,29 +45,31 @@ jobs:
             exit 1
           fi
 
-          VERSION="$(sed -n 's/^project(amnezia_vpn_tunnel_update VERSION \([0-9][0-9.]*\) LANGUAGES CXX)$/\1/p' CMakeLists.txt)"
-          test -n "$VERSION"
-          test "v$VERSION" = "$TAG"
-          grep -F "setApplicationVersion(QStringLiteral(\"$VERSION\"))" src/main.cpp
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Release metadata verified: $TAG"
-
-      - name: Ensure release does not already exist
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists." >&2
             exit 1
           fi
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists." >&2
-            exit 1
+
+          if TAG_SHA="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null)"; then
+            SOURCE_SHA="$TAG_SHA"
+            TAG_EXISTS=true
+          else
+            SOURCE_SHA="$GITHUB_SHA"
+            TAG_EXISTS=false
           fi
+
+          VERSION="$(git show "$SOURCE_SHA:CMakeLists.txt" | sed -n 's/^project(amnezia_vpn_tunnel_update VERSION \([0-9][0-9.]*\) LANGUAGES CXX)$/\1/p')"
+          test -n "$VERSION"
+          test "v$VERSION" = "$TAG"
+          git show "$SOURCE_SHA:src/main.cpp" | grep -F "setApplicationVersion(QStringLiteral(\"$VERSION\"))"
+
+          MARKER="$(git show "$SOURCE_SHA:.github/RELEASE" | tr -d '[:space:]')"
+          test "$MARKER" = "$TAG"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$TAG_EXISTS" >> "$GITHUB_OUTPUT"
+          echo "Release source verified: $TAG @ $SOURCE_SHA"
 
   build:
     name: Build release (${{ matrix.os }})
@@ -75,8 +83,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout release source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -160,6 +170,8 @@ jobs:
     timeout-minutes: 10
     env:
       TAG: ${{ needs.preflight.outputs.tag }}
+      SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+      TAG_EXISTS: ${{ needs.preflight.outputs.tag_exists }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
@@ -178,19 +190,21 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Create release tag
+      - name: Create release tag if needed
+        if: needs.preflight.outputs.tag_exists != 'true'
         shell: bash
         run: |
           set -euo pipefail
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
             -f ref="refs/tags/$TAG" \
-            -f sha="$GITHUB_SHA"
+            -f sha="$SOURCE_SHA"
 
       - name: Publish GitHub Release
         shell: bash
         run: |
           set -euo pipefail
           gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --generate-notes \
             --title "Amnezia VPN Tunnel Update $TAG"
