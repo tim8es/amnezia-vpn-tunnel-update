@@ -193,6 +193,7 @@ private slots:
         QCOMPARE(result.status, UpdateStatus::RestartRequired);
         QVERIFY(!result.sourceSha256.isEmpty());
         QCOMPARE(result.etag, QStringLiteral("etag-1"));
+        QVERIFY(!result.sourceJson.isEmpty());
         QVERIFY(!QFile::exists(store.pendingPath()));
         QVERIFY(!settings.exceptSites().contains(QStringLiteral("new.ru")));
         QVERIFY(settings.exceptSites().contains(QStringLiteral("personal.ru")));
