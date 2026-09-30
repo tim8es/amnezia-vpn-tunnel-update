@@ -135,18 +135,24 @@ UpdateResult markUpdateSkipped(const UpdateResult &available)
             available.etag};
 }
 
-UpdateResult restartAmneziaAndApply()
+UpdateResult restartAmneziaAndApply(const UpdateResult &available)
 {
+    if (available.sourceJson.isEmpty())
+        return {UpdateStatus::Error, QStringLiteral("Проверенный список для применения недоступен."), 0};
+
     QString restartTarget;
     QString error;
     if (!AmneziaProcess::stopForRestart(restartTarget, error))
         return {UpdateStatus::Error, error, 0};
 
-    UpdateResult result = runNetworkUpdate();
+    AmneziaSettings settings;
+    StateStore stateStore;
+    Updater updater(settings, stateStore);
+    UpdateResult result =
+        updater.updateFromBytes(available.sourceJson, false, available.etag);
 
     QString restartError;
-    const bool alreadyRunning = Updater::isAmneziaRunning();
-    if (!alreadyRunning && !AmneziaProcess::startAfterRestart(restartTarget, restartError)) {
+    if (!AmneziaProcess::startAfterRestart(restartTarget, restartError)) {
         if (result.status == UpdateStatus::Error) {
             result.message += QStringLiteral("\n\nКроме того, не удалось снова запустить Amnezia VPN: %1")
                                   .arg(restartError);
@@ -156,13 +162,6 @@ UpdateResult restartAmneziaAndApply()
                 QStringLiteral("%1\n\nСписок обработан, но не удалось снова запустить Amnezia VPN: %2")
                     .arg(result.message, restartError),
                 result.managedCount};
-    }
-
-    if (result.status == UpdateStatus::RestartRequired) {
-        return {UpdateStatus::Error,
-                QStringLiteral("Amnezia VPN снова запустилась до применения списка. "
-                               "Изменения не были записаны; повторите обновление."),
-                0};
     }
 
     return result;
@@ -177,7 +176,7 @@ UpdateResult runUpdateWithPrompt(QWidget *parent)
     if (!askToRestartAmnezia(parent))
         return markUpdateSkipped(result);
 
-    return restartAmneziaAndApply();
+    return restartAmneziaAndApply(result);
 }
 
 } // namespace
@@ -420,7 +419,9 @@ int main(int argc, char *argv[])
                 restartWatcher->deleteLater();
                 finish(restarted);
             });
-            restartWatcher->setFuture(QtConcurrent::run(restartAmneziaAndApply));
+            restartWatcher->setFuture(QtConcurrent::run([result]() {
+                return restartAmneziaAndApply(result);
+            }));
         });
 
         watcher->setFuture(QtConcurrent::run(runNetworkUpdate));
