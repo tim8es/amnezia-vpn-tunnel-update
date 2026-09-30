@@ -1,45 +1,117 @@
-# Amnezia VPN Tunnel Update
+<p align="center">
+  <img src="assets/amnezia-vpn-tunnel-update.svg" width="96" alt="Amnezia VPN Tunnel Update icon">
+</p>
 
-Независимая кроссплатформенная утилита, которая автоматически поддерживает список
-раздельного туннелирования **Amnezia VPN** в актуальном состоянии.
+<h1 align="center">Amnezia VPN Tunnel Update</h1>
 
-> Это отдельный неофициальный проект. Он не является частью Amnezia VPN и не требует
-> изменений клиента Amnezia.
+<p align="center">
+  Автоматическое обновление списка раздельного туннелирования Amnezia VPN без изменения клиента Amnezia.
+</p>
 
-Проект полностью независим по коду, сборкам и обновлению самой утилиты.
-Текущий **источник данных** — публичный автообновляемый релиз
-`lib4u/amnezia-tunneling-ru` (его можно будет заменить без переноса проекта):
+<p align="center">
+  <a href="https://github.com/tim8es/amnezia-vpn-tunnel-update/actions/workflows/ci.yml"><img src="https://github.com/tim8es/amnezia-vpn-tunnel-update/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg" alt="C++17">
+  <img src="https://img.shields.io/badge/Qt-6.5%2B-41CD52.svg" alt="Qt 6.5+">
+</p>
+
+<p align="center">
+  Русский · <a href="README.en.md">English</a>
+</p>
+
+> [!IMPORTANT]
+> Это независимый неофициальный проект. Он не является частью Amnezia VPN и не связан с командой Amnezia VPN. Подробнее: [NOTICE.md](NOTICE.md).
+
+## Что это
+
+**Amnezia VPN Tunnel Update** поддерживает список исключений split tunneling в актуальном состоянии автоматически.
+
+Текущий источник данных — публичный автообновляемый список:
 
 `https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json`
 
-## Для пользователя
+Утилита не модифицирует Amnezia VPN, не устанавливает драйверы и не работает постоянным фоновым процессом.
 
-1. Скачайте сборку для своей ОС.
+## Как это работает
+
+1. Утилита скачивает новый `amnezia.json`.
+2. Проверяет формат и защитные условия.
+3. Сравнивает SHA-256 с уже применённой версией.
+4. Сохраняет пользовательские домены, не принадлежащие updater'у.
+5. Создаёт backup текущего `Conf/ExceptSites`.
+6. Обновляет только список исключений.
+7. ОС запускает короткую проверку раз в 6 часов.
+
+| ОС | Автообновление |
+| --- | --- |
+| Windows | Task Scheduler |
+| macOS | LaunchAgent |
+| Linux | systemd user timer |
+
+**Admin/root не требуется.**
+
+## Что утилита не меняет
+
+Updater не должен автоматически менять:
+
+- VPN-сервер;
+- VPN-протокол;
+- `Conf/routeMode`;
+- `Conf/sitesSplitTunnelingEnabled`;
+- другие настройки Amnezia VPN, не относящиеся к списку исключений.
+
+## Защита от неудачного обновления
+
+Перед изменением настроек применяются несколько защит:
+
+- некорректный JSON отклоняется;
+- пустой список отклоняется;
+- аномально большой список отклоняется;
+- подозрительное массовое сокращение ранее управляемого списка блокируется;
+- пользовательские домены сохраняются;
+- перед записью создаётся backup;
+- если Amnezia VPN запущена, обновление откладывается;
+- при неизвестной/неинициализированной конфигурации updater ничего не меняет;
+- state/pending-файлы записываются атомарно там, где это применимо.
+
+Подробнее: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) и [SECURITY.md](SECURITY.md).
+
+## Установка
+
+### Стабильные версии
+
+Используйте страницу [Releases](https://github.com/tim8es/amnezia-vpn-tunnel-update/releases) для опубликованных версий.
+
+Если релизов ещё нет, артефакты последнего успешного [CI run](https://github.com/tim8es/amnezia-vpn-tunnel-update/actions/workflows/ci.yml) считаются development-сборками.
+
+### Windows
+
+Пакет: portable `.zip`.
+
+1. Распакуйте архив.
+2. Запустите `amnezia-vpn-tunnel-update.exe`.
+3. Нажмите **«Включить автообновление»**.
+
+Пока сборки не подписаны, SmartScreen может показать предупреждение.
+
+### macOS
+
+Пакет: `.dmg`.
+
+1. Откройте DMG.
 2. Запустите **Amnezia VPN Tunnel Update**.
 3. Нажмите **«Включить автообновление»**.
-4. Готово.
 
-После установки утилита не висит в фоне. ОС запускает короткую проверку раз в 6 часов:
+Пока сборки не подписаны и не notarized, Gatekeeper может потребовать ручное подтверждение запуска.
 
-- Windows — Task Scheduler;
-- macOS — LaunchAgent;
-- Linux — systemd user timer.
+### Linux
 
-Установка работает без admin/root.
+Пакет: x86_64 `.AppImage`.
 
-## Что делает утилита
-
-- скачивает актуальный список из upstream;
-- валидирует JSON до любых изменений;
-- сравнивает SHA-256 и не переписывает настройки без необходимости;
-- обновляет `Conf/ExceptSites` через Qt `QSettings`, тем же форматом, который использует Amnezia;
-- сохраняет домены, добавленные пользователем вручную;
-- удаляет домены, которые были удалены из upstream;
-- блокирует подозрительное массовое сокращение upstream-списка;
-- создаёт backup перед каждым применением;
-- не меняет VPN-сервер, протокол, `routeMode` или включение split tunneling;
-- если Amnezia запущена, ничего не пишет в её настройки — сохраняет pending update и применяет его после закрытия клиента;
-- при неизвестной/неинициализированной конфигурации работает fail-safe: ничего не меняет.
+```bash
+chmod +x amnezia-vpn-tunnel-update-linux-x86_64.AppImage
+./amnezia-vpn-tunnel-update-linux-x86_64.AppImage
+```
 
 ## CLI
 
@@ -51,39 +123,80 @@ amnezia-vpn-tunnel-update --uninstall
 amnezia-vpn-tunnel-update --validate-file amnezia.json
 ```
 
-Без аргументов открывается минимальный GUI с одной основной кнопкой.
+Без аргументов открывается GUI.
 
-## Логика сохранения пользовательских доменов
+## Пользовательские домены
 
-Updater хранит список записей, которыми управляет сам:
+Updater хранит идентичность доменов, которыми управляет сам:
 
 ```text
-user entries = current Amnezia list - previous managed set
+user entries = current Amnezia entries - previous managed set
 result       = user entries + new managed set
 ```
 
-Поэтому пользовательские исключения не пропадают при очередном обновлении upstream.
+Поэтому обычные пользовательские исключения не должны исчезать после обновления upstream.
 
-## Сборка
+Текущее ограничение модели: hostname является единицей владения. Если пользователь вручную изменил IP-список у hostname, который также управляется upstream, этот hostname всё равно может считаться updater-managed.
 
-Требуются CMake 3.21+ и Qt 6.5+ (Core, Network, Widgets, Test).
+## Сборка из исходников
+
+Требования:
+
+- CMake 3.21+;
+- C++17;
+- Qt 6.5+ — Core, Network, Widgets, Test.
 
 ```bash
-cmake -S . -B build -DBUILD_TESTING=ON
+cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-GitHub Actions собирает и тестирует Windows, macOS и Linux. Linux job дополнительно
-скачивает текущий upstream `amnezia.json` и проверяет его реальным бинарником.
+Проверка совместимости с форматом списка:
 
-## Статус
+```bash
+./build/amnezia-vpn-tunnel-update --validate-file amnezia.json
+```
 
-Это самостоятельный репозиторий утилиты. Он не зависит от структуры upstream-проекта.
-Репозиторий `lib4u/amnezia-tunneling-ru` используется только как внешний источник актуального списка.
+## CI и релизы
 
-## Подпись релизов
+CI собирает и тестирует проект на Windows, macOS и Linux. Linux-job дополнительно скачивает текущий upstream `amnezia.json` и валидирует его реальным бинарником.
 
-Тестовые артефакты GitHub Actions пока не подписаны. Для публичного standalone-релиза
-желательно добавить Windows code signing и macOS signing/notarization, чтобы убрать
-SmartScreen/Gatekeeper-предупреждения и сохранить максимально простой UX.
+Release workflow запускается на тегах `v*`, собирает платформенные пакеты и SHA-256 checksums. Процесс описан в [docs/RELEASING.md](docs/RELEASING.md).
+
+## Известные ограничения
+
+- текущие публичные development-сборки не подписаны;
+- macOS universal binary пока не гарантируется;
+- Linux artifact сейчас ориентирован на x86_64;
+- updater обновляет список маршрутизации, но не обновляет сам себя;
+- корректность содержимого upstream-списка остаётся отдельной trust-зависимостью.
+
+## Документация проекта
+
+| Документ | Назначение |
+| --- | --- |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Как предложить изменение |
+| [SECURITY.md](SECURITY.md) | Уязвимости и security model |
+| [PRIVACY.md](PRIVACY.md) | Какие данные читает/отправляет приложение |
+| [SUPPORT.md](SUPPORT.md) | Куда обращаться с проблемами |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Правила участия |
+| [CHANGELOG.md](CHANGELOG.md) | История изменений |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Архитектура и trust boundaries |
+| [docs/RELEASING.md](docs/RELEASING.md) | Процесс релиза |
+
+## Участие в разработке
+
+Issues и pull requests приветствуются. Перед изменениями прочитайте [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Для проблем с **самим содержимым списка доменов** используйте upstream-репозиторий: [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru).
+
+## Privacy
+
+В проекте нет намеренно добавленной аналитики или телеметрии. Updater обращается к GitHub для загрузки актуального списка. Подробности: [PRIVACY.md](PRIVACY.md).
+
+## Лицензия
+
+Код распространяется по лицензии [MIT](LICENSE).
+
+Copyright © 2026 [tim8es](https://github.com/tim8es).
