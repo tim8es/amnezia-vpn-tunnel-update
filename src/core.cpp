@@ -4,6 +4,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
@@ -17,6 +18,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 
@@ -264,7 +266,7 @@ bool StateStore::load(State &state, QString &error) const
         state.sourceUrl = QString::fromLatin1(kDomainSourceUrl);
     state.sourceSha256 = o.value(QStringLiteral("sourceSha256")).toString();
     state.etag = o.value(QStringLiteral("etag")).toString();
-    state.pendingSha256 = o.value(QStringLiteral("pendingSha256")).toString();
+    state.skippedSha256 = o.value(QStringLiteral("skippedSha256")).toString();
     state.sourceTransitionPending = o.value(QStringLiteral("sourceTransitionPending")).toBool(false);
     for (const auto &v : o.value(QStringLiteral("managedDomains")).toArray())
         state.managedDomains.append(v.toString());
@@ -275,12 +277,12 @@ bool StateStore::load(State &state, QString &error) const
 bool StateStore::save(const State &state, QString &error) const
 {
     QJsonObject o;
-    o.insert(QStringLiteral("version"), 2);
+    o.insert(QStringLiteral("version"), 3);
     o.insert(QStringLiteral("sourceUrl"),
              state.sourceUrl.isEmpty() ? QString::fromLatin1(kDomainSourceUrl) : state.sourceUrl);
     o.insert(QStringLiteral("sourceSha256"), state.sourceSha256);
     o.insert(QStringLiteral("etag"), state.etag);
-    o.insert(QStringLiteral("pendingSha256"), state.pendingSha256);
+    o.insert(QStringLiteral("skippedSha256"), state.skippedSha256);
     o.insert(QStringLiteral("sourceTransitionPending"), state.sourceTransitionPending);
     QJsonArray managed;
     for (const QString &domain : state.managedDomains)
@@ -288,26 +290,6 @@ bool StateStore::save(const State &state, QString &error) const
     o.insert(QStringLiteral("managedDomains"), managed);
     return writeBytesAtomically(QDir(m_rootPath).filePath(QStringLiteral("state.json")),
                                 QJsonDocument(o).toJson(QJsonDocument::Indented), error);
-}
-
-bool StateStore::savePending(const QByteArray &json, QString &error) const
-{
-    return writeBytesAtomically(pendingPath(), json, error);
-}
-
-bool StateStore::loadPending(QByteArray &json, QString &error) const
-{
-    QFile file(pendingPath());
-    if (!file.exists()) {
-        error = QStringLiteral("No pending update");
-        return false;
-    }
-    if (!file.open(QIODevice::ReadOnly)) {
-        error = QStringLiteral("Cannot read pending update: %1").arg(file.errorString());
-        return false;
-    }
-    json = file.readAll();
-    return true;
 }
 
 void StateStore::clearPending() const
@@ -371,6 +353,10 @@ bool AmneziaSettings::splitTunnelingEnabled() const
 Updater::Updater(AmneziaSettings &settings, StateStore &stateStore, QObject *parent)
     : QObject(parent), m_settings(settings), m_stateStore(stateStore)
 {
+    // v0.2.x used pending.json while waiting for Amnezia to exit. That behavior
+    // was removed: updates are now either applied immediately after an approved
+    // restart or explicitly skipped.
+    m_stateStore.clearPending();
 }
 
 QString Updater::sourceUrl() const
@@ -414,8 +400,26 @@ bool Updater::setSourceUrl(const QString &url, QString &error)
     state.sourceUrl = normalized;
     state.sourceSha256.clear();
     state.etag.clear();
-    state.pendingSha256.clear();
+    state.skippedSha256.clear();
     state.sourceTransitionPending = true;
+    m_stateStore.clearPending();
+    return m_stateStore.save(state, error);
+}
+
+bool Updater::markSkipped(const QString &sha256, const QString &etag, QString &error)
+{
+    if (sha256.isEmpty()) {
+        error = QStringLiteral("Cannot skip an update without a source checksum.");
+        return false;
+    }
+
+    State state;
+    if (!m_stateStore.load(state, error))
+        return false;
+
+    state.skippedSha256 = sha256;
+    if (!etag.isEmpty())
+        state.etag = etag;
     m_stateStore.clearPending();
     return m_stateStore.save(state, error);
 }
@@ -445,7 +449,7 @@ UpdateResult Updater::applyParsed(const QByteArray &sourceJson,
     if (!etag.isEmpty())
         state.etag = etag;
     state.managedDomains = parsed.sites.keys();
-    state.pendingSha256.clear();
+    state.skippedSha256.clear();
     state.sourceTransitionPending = false;
 
     if (!m_stateStore.save(state, error)) {
@@ -478,6 +482,7 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
 
     // Guard against a valid-but-broken upstream release that would otherwise
     // remove a large portion of the previously managed list automatically.
+    // An intentional source switch is exempt for its first successful apply.
     if (!state.sourceTransitionPending
         && state.managedDomains.size() >= 100
         && parsed.sites.size() * 2 < state.managedDomains.size()) {
@@ -488,57 +493,24 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
     }
 
     const QString hash = QString::fromLatin1(parsed.sha256);
-    if (hash == state.sourceSha256 && state.pendingSha256.isEmpty())
+    if (hash == state.sourceSha256)
         return {UpdateStatus::Unchanged, QStringLiteral("The list is already up to date."),
-                static_cast<int>(parsed.sites.size())};
+                static_cast<int>(parsed.sites.size()), hash, etag};
 
-    if (amneziaRunning) {
-        if (!m_stateStore.savePending(json, error))
-            return {UpdateStatus::Error, error, 0};
-        state.pendingSha256 = hash;
-        if (!etag.isEmpty())
-            state.etag = etag;
-        if (!m_stateStore.save(state, error))
-            return {UpdateStatus::Error, error, 0};
-        return {UpdateStatus::Pending,
-                QStringLiteral("A new list is ready and will be applied after Amnezia VPN exits."),
-                static_cast<int>(parsed.sites.size())};
-    }
+    if (hash == state.skippedSha256)
+        return {UpdateStatus::Skipped, QStringLiteral("This list version was previously skipped."),
+                static_cast<int>(parsed.sites.size()), hash, etag};
+
+    if (amneziaRunning)
+        return {UpdateStatus::RestartRequired,
+                QStringLiteral("Amnezia VPN must be restarted before applying this list."),
+                static_cast<int>(parsed.sites.size()), hash, etag, json};
 
     return applyParsed(json, parsed, state, etag);
 }
 
-UpdateResult Updater::applyPendingIfPossible(bool amneziaRunning)
+UpdateResult Updater::updateFromNetwork(int timeoutMs)
 {
-    QString error;
-    State state;
-    if (!m_stateStore.load(state, error))
-        return {UpdateStatus::Error, error, 0};
-    if (state.pendingSha256.isEmpty())
-        return {UpdateStatus::Unchanged, QStringLiteral("No pending update."), 0};
-    if (amneziaRunning)
-        return {UpdateStatus::Pending, QStringLiteral("Amnezia VPN is still running."), 0};
-
-    QByteArray json;
-    if (!m_stateStore.loadPending(json, error))
-        return {UpdateStatus::Error, error, 0};
-
-    ParsedList parsed;
-    if (!ListCodec::parse(json, parsed, error))
-        return {UpdateStatus::Error, QStringLiteral("Pending update is invalid: %1").arg(error), 0};
-
-    if (QString::fromLatin1(parsed.sha256) != state.pendingSha256)
-        return {UpdateStatus::Error, QStringLiteral("Pending update checksum does not match state."), 0};
-
-    return applyParsed(json, parsed, state, state.etag);
-}
-
-UpdateResult Updater::updateFromNetwork(bool amneziaRunning, int timeoutMs)
-{
-    const UpdateResult pending = applyPendingIfPossible(amneziaRunning);
-    if (pending.status == UpdateStatus::Error)
-        return pending;
-
     QString error;
     State state;
     if (!m_stateStore.load(state, error))
@@ -551,7 +523,7 @@ UpdateResult Updater::updateFromNetwork(bool amneziaRunning, int timeoutMs)
     QNetworkRequest request(QUrl(state.sourceUrl));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.1");
+    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.1");
     if (!state.etag.isEmpty())
         request.setRawHeader("If-None-Match", state.etag.toUtf8());
 
@@ -574,9 +546,11 @@ UpdateResult Updater::updateFromNetwork(bool amneziaRunning, int timeoutMs)
         reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (httpStatus == 304) {
         reply->deleteLater();
-        return pending.status == UpdateStatus::Updated
-            ? pending
-            : UpdateResult{UpdateStatus::Unchanged, QStringLiteral("The list is already up to date."), 0};
+        if (!state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256)
+            return {UpdateStatus::Skipped, QStringLiteral("This list version was previously skipped."), 0,
+                    state.skippedSha256, state.etag};
+        return {UpdateStatus::Unchanged, QStringLiteral("The list is already up to date."), 0,
+                state.sourceSha256, state.etag};
     }
 
     if (reply->error() != QNetworkReply::NoError || httpStatus != 200) {
@@ -589,7 +563,7 @@ UpdateResult Updater::updateFromNetwork(bool amneziaRunning, int timeoutMs)
     const QByteArray body = reply->readAll();
     const QString etag = QString::fromUtf8(reply->rawHeader("ETag"));
     reply->deleteLater();
-    return updateFromBytes(body, amneziaRunning, etag);
+    return updateFromBytes(body, isAmneziaRunning(), etag);
 }
 
 bool Updater::isAmneziaRunning()
@@ -609,6 +583,118 @@ bool Updater::isAmneziaRunning()
         return true;
     return process.exitCode() == 0;
 #endif
+}
+
+bool AmneziaProcess::stopForRestart(QString &restartTarget, QString &error, int timeoutMs)
+{
+#ifdef Q_OS_WIN
+    QProcess pathLookup;
+    pathLookup.start(QStringLiteral("powershell.exe"),
+                     {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
+                      QStringLiteral("-Command"),
+                      QStringLiteral("(Get-Process -Name AmneziaVPN -ErrorAction SilentlyContinue | "
+                                     "Select-Object -First 1 -ExpandProperty Path)")});
+    if (pathLookup.waitForFinished(4000) && pathLookup.exitCode() == 0)
+        restartTarget = QString::fromLocal8Bit(pathLookup.readAllStandardOutput()).trimmed();
+
+    if (restartTarget.isEmpty()) {
+        const QStringList candidates = {
+            qEnvironmentVariable("ProgramFiles") + QStringLiteral("/AmneziaVPN/AmneziaVPN.exe"),
+            qEnvironmentVariable("ProgramFiles(x86)") + QStringLiteral("/AmneziaVPN/AmneziaVPN.exe")
+        };
+        for (const QString &candidate : candidates) {
+            if (!candidate.startsWith('/') && QFileInfo::exists(candidate)) {
+                restartTarget = QDir::cleanPath(candidate);
+                break;
+            }
+        }
+    }
+
+    if (restartTarget.isEmpty()) {
+        error = QStringLiteral("Could not determine the Amnezia VPN executable path.");
+        return false;
+    }
+
+    QProcess quit;
+    quit.start(QStringLiteral("taskkill"),
+               {QStringLiteral("/IM"), QStringLiteral("AmneziaVPN.exe")});
+    if (!quit.waitForFinished(5000) && Updater::isAmneziaRunning()) {
+        error = QStringLiteral("Timed out while asking Amnezia VPN to close.");
+        return false;
+    }
+#elif defined(Q_OS_MACOS)
+    restartTarget = QStringLiteral("AmneziaVPN");
+    QProcess quit;
+    quit.start(QStringLiteral("/usr/bin/osascript"),
+               {QStringLiteral("-e"), QStringLiteral("tell application \"AmneziaVPN\" to quit")});
+    if (!quit.waitForFinished(5000) && Updater::isAmneziaRunning()) {
+        error = QStringLiteral("Timed out while asking Amnezia VPN to quit.");
+        return false;
+    }
+#else
+    QProcess pidLookup;
+    pidLookup.start(QStringLiteral("pgrep"),
+                    {QStringLiteral("-x"), QStringLiteral("AmneziaVPN")});
+    if (pidLookup.waitForFinished(3000) && pidLookup.exitCode() == 0) {
+        const QString pid = QString::fromLocal8Bit(pidLookup.readLine()).trimmed();
+        if (!pid.isEmpty())
+            restartTarget = QFileInfo(QStringLiteral("/proc/%1/exe").arg(pid)).symLinkTarget();
+    }
+
+    if (restartTarget.isEmpty())
+        restartTarget = QStandardPaths::findExecutable(QStringLiteral("AmneziaVPN"));
+
+    if (restartTarget.isEmpty()) {
+        for (const QString &candidate : {
+                 QStringLiteral("/usr/local/bin/AmneziaVPN"),
+                 QStringLiteral("/opt/AmneziaVPN/bin/AmneziaVPN")}) {
+            if (QFileInfo::exists(candidate)) {
+                restartTarget = candidate;
+                break;
+            }
+        }
+    }
+
+    if (restartTarget.isEmpty()) {
+        error = QStringLiteral("Could not determine the Amnezia VPN executable path.");
+        return false;
+    }
+
+    QProcess quit;
+    quit.start(QStringLiteral("pkill"),
+               {QStringLiteral("-TERM"), QStringLiteral("-x"), QStringLiteral("AmneziaVPN")});
+    if (!quit.waitForFinished(5000) && Updater::isAmneziaRunning()) {
+        error = QStringLiteral("Timed out while asking Amnezia VPN to close.");
+        return false;
+    }
+#endif
+
+    QElapsedTimer timer;
+    timer.start();
+    while (Updater::isAmneziaRunning()) {
+        if (timer.elapsed() >= timeoutMs) {
+            error = QStringLiteral("Amnezia VPN did not close in time. The update was not applied.");
+            return false;
+        }
+        QThread::msleep(250);
+    }
+    return true;
+}
+
+bool AmneziaProcess::startAfterRestart(const QString &restartTarget, QString &error)
+{
+    bool started = false;
+#ifdef Q_OS_MACOS
+    started = QProcess::startDetached(QStringLiteral("/usr/bin/open"),
+                                      {QStringLiteral("-a"), restartTarget});
+#else
+    started = QProcess::startDetached(restartTarget, {});
+#endif
+    if (!started) {
+        error = QStringLiteral("The list was processed, but Amnezia VPN could not be started again.");
+        return false;
+    }
+    return true;
 }
 
 bool Scheduler::install(const QString &programPath, QString &error)

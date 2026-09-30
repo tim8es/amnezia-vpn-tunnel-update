@@ -6,6 +6,17 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced deferred pending updates with an explicit restart-or-skip flow when Amnezia VPN is running.
+- Scheduled checks remember a skipped SHA-256 and ask again only when a newer list appears.
+- GUI network checks now run off the UI thread so Windows remains responsive while checking sources.
+- Approved updates gracefully stop Amnezia VPN, apply the list, and start Amnezia VPN again.
+
+### Fixed
+
+- Fixed the Windows GUI appearing to freeze when applying a source while Amnezia VPN is running.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

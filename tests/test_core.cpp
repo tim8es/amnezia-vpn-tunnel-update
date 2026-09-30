@@ -175,7 +175,7 @@ private slots:
         QVERIFY(!QDir(store.backupDir()).exists());
     }
 
-    void runningAmneziaCreatesPendingWithoutWritingSettings()
+    void runningAmneziaRequestsRestartWithoutWritingSettings()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
@@ -189,14 +189,17 @@ private slots:
         Updater updater(settings, store);
 
         const UpdateResult result =
-            updater.updateFromBytes(listJson({QStringLiteral("new.ru")}), true);
-        QCOMPARE(result.status, UpdateStatus::Pending);
-        QVERIFY(QFile::exists(store.pendingPath()));
+            updater.updateFromBytes(listJson({QStringLiteral("new.ru")}), true, QStringLiteral("etag-1"));
+        QCOMPARE(result.status, UpdateStatus::RestartRequired);
+        QVERIFY(!result.sourceSha256.isEmpty());
+        QCOMPARE(result.etag, QStringLiteral("etag-1"));
+        QVERIFY(!result.sourceJson.isEmpty());
+        QVERIFY(!QFile::exists(store.pendingPath()));
         QVERIFY(!settings.exceptSites().contains(QStringLiteral("new.ru")));
         QVERIFY(settings.exceptSites().contains(QStringLiteral("personal.ru")));
     }
 
-    void pendingUpdateAppliesAfterAmneziaStops()
+    void skippedVersionStaysSkippedUntilHashChanges()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
@@ -207,17 +210,22 @@ private slots:
         AmneziaSettings settings(settingsPath);
         Updater updater(settings, store);
 
-        QCOMPARE(updater.updateFromBytes(listJson({QStringLiteral("pending.ru")}), true).status,
-                 UpdateStatus::Pending);
-        QCOMPARE(updater.applyPendingIfPossible(false).status, UpdateStatus::Updated);
-        QVERIFY(settings.exceptSites().contains(QStringLiteral("pending.ru")));
-        QVERIFY(!QFile::exists(store.pendingPath()));
+        const QByteArray first = listJson({QStringLiteral("first.ru")});
+        const UpdateResult available =
+            updater.updateFromBytes(first, true, QStringLiteral("etag-1"));
+        QCOMPARE(available.status, UpdateStatus::RestartRequired);
 
-        State state;
         QString error;
-        QVERIFY(store.load(state, error));
-        QVERIFY(state.pendingSha256.isEmpty());
-        QVERIFY(!state.sourceSha256.isEmpty());
+        QVERIFY2(updater.markSkipped(available.sourceSha256, available.etag, error), qPrintable(error));
+
+        const UpdateResult same =
+            updater.updateFromBytes(first, true, QStringLiteral("etag-1"));
+        QCOMPARE(same.status, UpdateStatus::Skipped);
+
+        const UpdateResult newer =
+            updater.updateFromBytes(listJson({QStringLiteral("second.ru")}), true, QStringLiteral("etag-2"));
+        QCOMPARE(newer.status, UpdateStatus::RestartRequired);
+        QVERIFY(newer.sourceSha256 != available.sourceSha256);
     }
 
     void suspiciousShrinkNeverTouchesSettings()
@@ -282,7 +290,7 @@ private slots:
         QVERIFY(state.etag.isEmpty());
     }
 
-    void sourceChangeClearsPendingButKeepsManagedOwnership()
+    void sourceChangeClearsSkippedVersionButKeepsManagedOwnership()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
@@ -294,14 +302,20 @@ private slots:
         state.sourceUrl = QString::fromLatin1(kDomainSourceUrl);
         state.sourceSha256 = QStringLiteral("old-hash");
         state.etag = QStringLiteral("old-etag");
-        state.pendingSha256 = QStringLiteral("pending-hash");
+        state.skippedSha256 = QStringLiteral("skipped-hash");
         state.managedDomains = {QStringLiteral("old.example")};
         QString error;
         QVERIFY2(store.save(state, error), qPrintable(error));
-        QVERIFY2(store.savePending(listJson({QStringLiteral("pending.example")}), error), qPrintable(error));
+
+        QDir().mkpath(store.rootPath());
+        QFile legacyPending(store.pendingPath());
+        QVERIFY(legacyPending.open(QIODevice::WriteOnly));
+        legacyPending.write(listJson({QStringLiteral("legacy-pending.example")}));
+        legacyPending.close();
 
         AmneziaSettings settings(settingsPath);
         Updater updater(settings, store);
+        QVERIFY(!QFile::exists(store.pendingPath()));
         QVERIFY2(updater.setSourceUrl(QString::fromLatin1(kIpFullSourceUrl), error), qPrintable(error));
 
         State after;
@@ -310,9 +324,8 @@ private slots:
         QCOMPARE(after.managedDomains, QStringList{QStringLiteral("old.example")});
         QVERIFY(after.sourceSha256.isEmpty());
         QVERIFY(after.etag.isEmpty());
-        QVERIFY(after.pendingSha256.isEmpty());
+        QVERIFY(after.skippedSha256.isEmpty());
         QVERIFY(after.sourceTransitionPending);
-        QVERIFY(!QFile::exists(store.pendingPath()));
     }
 
     void sourceTransitionReplacesManagedEntriesWithoutShrinkGuard()
@@ -325,6 +338,7 @@ private slots:
         State state;
         state.sourceUrl = QString::fromLatin1(kIpLiteSourceUrl);
         state.sourceTransitionPending = true;
+        state.skippedSha256 = QStringLiteral("old-skipped-hash");
         for (int i = 0; i < 120; ++i) {
             const QString domain = QStringLiteral("old-%1.example").arg(i);
             current.insert(domain, QStringList{});
@@ -359,6 +373,7 @@ private slots:
         State saved;
         QVERIFY2(store.load(saved, error), qPrintable(error));
         QVERIFY(!saved.sourceTransitionPending);
+        QVERIFY(saved.skippedSha256.isEmpty());
         QCOMPARE(saved.managedDomains.size(), 10);
     }
 
