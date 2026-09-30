@@ -632,7 +632,18 @@ bool AmneziaProcess::stopForRestart(QString &restartTarget, QString &error, int 
         return false;
     }
 #else
-    restartTarget = QStandardPaths::findExecutable(QStringLiteral("AmneziaVPN"));
+    QProcess pidLookup;
+    pidLookup.start(QStringLiteral("pgrep"),
+                    {QStringLiteral("-x"), QStringLiteral("AmneziaVPN")});
+    if (pidLookup.waitForFinished(3000) && pidLookup.exitCode() == 0) {
+        const QString pid = QString::fromLocal8Bit(pidLookup.readLine()).trimmed();
+        if (!pid.isEmpty())
+            restartTarget = QFileInfo(QStringLiteral("/proc/%1/exe").arg(pid)).symLinkTarget();
+    }
+
+    if (restartTarget.isEmpty())
+        restartTarget = QStandardPaths::findExecutable(QStringLiteral("AmneziaVPN"));
+
     if (restartTarget.isEmpty()) {
         for (const QString &candidate : {
                  QStringLiteral("/usr/local/bin/AmneziaVPN"),
