@@ -504,7 +504,7 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
     if (amneziaRunning)
         return {UpdateStatus::RestartRequired,
                 QStringLiteral("Amnezia VPN must be restarted before applying this list."),
-                static_cast<int>(parsed.sites.size()), hash, etag};
+                static_cast<int>(parsed.sites.size()), hash, etag, json};
 
     return applyParsed(json, parsed, state, etag);
 }
