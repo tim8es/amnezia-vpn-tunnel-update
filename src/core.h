@@ -46,6 +46,7 @@ struct UpdateResult {
     int managedCount = 0;
     QString sourceSha256;
     QString etag;
+    QByteArray sourceJson;
 };
 
 class ListCodec {
