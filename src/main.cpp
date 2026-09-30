@@ -214,7 +214,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("tim8es"));
     QCoreApplication::setApplicationName(QStringLiteral("amnezia-vpn-tunnel-update"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.3"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.4"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -441,12 +441,7 @@ int main(int argc, char *argv[])
             completion(result);
         };
 
-        auto *watcher = new QFutureWatcher<UpdateResult>(&window);
-        QObject::connect(watcher, &QFutureWatcher<UpdateResult>::finished, &window,
-                         [&, watcher, finish]() {
-            const UpdateResult result = watcher->result();
-            watcher->deleteLater();
-
+        updater.updateFromNetworkAsync(false, [&, finish](const UpdateResult &result) {
             if (result.status != UpdateStatus::RestartRequired) {
                 finish(result);
                 return;
@@ -469,10 +464,6 @@ int main(int argc, char *argv[])
                 return restartAmneziaAndApply(result);
             }));
         });
-
-        watcher->setFuture(QtConcurrent::run([]() {
-            return runNetworkUpdate(false);
-        }));
     };
 
     QObject::connect(sourceCombo, &QComboBox::currentIndexChanged, &window, [&](int) {
@@ -482,6 +473,7 @@ int main(int argc, char *argv[])
     QObject::connect(applySource, &QPushButton::clicked, &window, [&]() {
         if (!persistSelectedSource())
             return;
+        refreshStatus();
 
         runGuiUpdate(applySource, QStringLiteral("Проверяю список…"),
                      [&](const UpdateResult &result) {
@@ -496,6 +488,7 @@ int main(int argc, char *argv[])
     QObject::connect(updateNow, &QPushButton::clicked, &window, [&]() {
         if (!persistSelectedSource())
             return;
+        refreshStatus();
 
         runGuiUpdate(updateNow, QStringLiteral("Проверяю обновление…"),
                      [&](const UpdateResult &result) {
