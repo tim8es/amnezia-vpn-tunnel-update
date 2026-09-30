@@ -17,8 +17,8 @@ It also stores local updater state such as:
 - the selected source URL;
 - the last source SHA-256;
 - ETag;
+- the SHA-256 of a list version explicitly skipped by the user;
 - updater-managed entries (domains or IPv4/CIDR networks);
-- pending-update checksum/data;
 - local backups created before settings changes.
 
 These files are stored in the application's per-user data location selected by Qt / the operating system.
