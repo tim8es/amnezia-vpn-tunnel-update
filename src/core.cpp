@@ -22,6 +22,12 @@
 #include <QTimer>
 #include <QUrl>
 
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <windows.h>
+#include <tlhelp32.h>
+#endif
+
 #ifdef Q_OS_UNIX
 #include <unistd.h>
 #endif
@@ -469,7 +475,8 @@ UpdateResult Updater::applyParsed(const QByteArray &sourceJson,
             static_cast<int>(parsed.sites.size())};
 }
 
-UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunning, const QString &etag)
+UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunning,
+                                      const QString &etag, bool respectSkipped)
 {
     ParsedList parsed;
     QString error;
@@ -497,7 +504,7 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
         return {UpdateStatus::Unchanged, QStringLiteral("The list is already up to date."),
                 static_cast<int>(parsed.sites.size()), hash, etag};
 
-    if (hash == state.skippedSha256)
+    if (respectSkipped && hash == state.skippedSha256)
         return {UpdateStatus::Skipped, QStringLiteral("This list version was previously skipped."),
                 static_cast<int>(parsed.sites.size()), hash, etag};
 
@@ -509,7 +516,7 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
     return applyParsed(json, parsed, state, etag);
 }
 
-UpdateResult Updater::updateFromNetwork(int timeoutMs)
+UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
 {
     QString error;
     State state;
@@ -524,7 +531,9 @@ UpdateResult Updater::updateFromNetwork(int timeoutMs)
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.1");
-    if (!state.etag.isEmpty())
+    const bool skippedVersionPending =
+        !state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256;
+    if (!state.etag.isEmpty() && (respectSkipped || !skippedVersionPending))
         request.setRawHeader("If-None-Match", state.etag.toUtf8());
 
     QNetworkReply *reply = manager.get(request);
@@ -563,21 +572,34 @@ UpdateResult Updater::updateFromNetwork(int timeoutMs)
     const QByteArray body = reply->readAll();
     const QString etag = QString::fromUtf8(reply->rawHeader("ETag"));
     reply->deleteLater();
-    return updateFromBytes(body, isAmneziaRunning(), etag);
+    return updateFromBytes(body, isAmneziaRunning(), etag, respectSkipped);
 }
 
 bool Updater::isAmneziaRunning()
 {
-    QProcess process;
 #ifdef Q_OS_WIN
-    process.start(QStringLiteral("tasklist"),
-                  {QStringLiteral("/FI"), QStringLiteral("IMAGENAME eq AmneziaVPN.exe"),
-                   QStringLiteral("/NH")});
-    if (!process.waitForFinished(3000))
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
         return true; // conservative: never write when process state is unknown
-    return QString::fromLocal8Bit(process.readAllStandardOutput())
-        .contains(QStringLiteral("AmneziaVPN.exe"), Qt::CaseInsensitive);
+
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    bool running = false;
+
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (QString::fromWCharArray(entry.szExeFile)
+                    .compare(QStringLiteral("AmneziaVPN.exe"), Qt::CaseInsensitive) == 0) {
+                running = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return running;
 #else
+    QProcess process;
     process.start(QStringLiteral("pgrep"), {QStringLiteral("-x"), QStringLiteral("AmneziaVPN")});
     if (!process.waitForFinished(3000))
         return true;
