@@ -41,11 +41,17 @@ struct WindowsProcessInfo {
     QString path;
 };
 
-bool findWindowsAmneziaProcess(WindowsProcessInfo &out)
+bool findWindowsAmneziaProcess(WindowsProcessInfo &out, bool *queryOk = nullptr)
 {
+    if (queryOk)
+        *queryOk = false;
+
     const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE)
         return false;
+
+    if (queryOk)
+        *queryOk = true;
 
     PROCESSENTRY32W entry{};
     entry.dwSize = sizeof(entry);
@@ -73,7 +79,7 @@ bool findWindowsAmneziaProcess(WindowsProcessInfo &out)
         OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, out.pid);
     if (process) {
         wchar_t buffer[32768];
-        DWORD size = static_cast<DWORD>(std::size(buffer));
+        DWORD size = static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0]));
         if (QueryFullProcessImageNameW(process, 0, buffer, &size))
             out.path = QString::fromWCharArray(buffer, static_cast<int>(size));
         CloseHandle(process);
@@ -706,7 +712,9 @@ bool Updater::isAmneziaRunning()
 {
 #ifdef Q_OS_WIN
     WindowsProcessInfo process;
-    return findWindowsAmneziaProcess(process);
+    bool queryOk = false;
+    const bool found = findWindowsAmneziaProcess(process, &queryOk);
+    return !queryOk || found; // conservative when process enumeration fails
 #else
     QProcess process;
     process.start(QStringLiteral("pgrep"), {QStringLiteral("-x"), QStringLiteral("AmneziaVPN")});
@@ -720,8 +728,11 @@ bool AmneziaProcess::stopForRestart(QString &restartTarget, QString &error, int 
 {
 #ifdef Q_OS_WIN
     WindowsProcessInfo processInfo;
-    if (!findWindowsAmneziaProcess(processInfo)) {
-        error = QStringLiteral("Amnezia VPN is not running.");
+    bool queryOk = false;
+    if (!findWindowsAmneziaProcess(processInfo, &queryOk)) {
+        error = queryOk
+            ? QStringLiteral("Amnezia VPN is not running.")
+            : QStringLiteral("Could not inspect running processes.");
         return false;
     }
 
