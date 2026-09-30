@@ -40,11 +40,12 @@ The utility does not patch the Amnezia client, install drivers, or stay resident
 
 1. Fetch the selected JSON list.
 2. Parse and validate it.
-3. Compare its SHA-256 with the last applied source.
-4. Preserve entries not owned by the updater.
-5. Back up the current `Conf/ExceptSites`.
-6. Update the exclusion list only.
-7. Let the operating system run a short check every six hours.
+3. Compare its SHA-256 with the last applied or skipped version.
+4. If Amnezia VPN is closed, apply the update immediately.
+5. If Amnezia VPN is running, ask whether to **Restart now** or **Skip**.
+6. On approval, restart Amnezia VPN gracefully, back up the current settings, and update `Conf/ExceptSites`.
+7. A skipped SHA-256 is not prompted again; the next changed list can prompt again.
+8. Let the operating system run a short check every six hours.
 
 | OS | Scheduler |
 | --- | --- |
@@ -52,7 +53,7 @@ The utility does not patch the Amnezia client, install drivers, or stay resident
 | macOS | LaunchAgent |
 | Linux | systemd user timer |
 
-No administrator/root privileges are required.
+No administrator/root privileges are required. The updater does not wait for a future Amnezia shutdown and does not keep a watcher process alive.
 
 ## Installation
 
