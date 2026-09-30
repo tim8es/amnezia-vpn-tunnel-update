@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QMap>
+#include <QNetworkAccessManager>
 #include <QObject>
 #include <QSettings>
 #include <QString>
@@ -89,6 +90,20 @@ public:
 
 private:
     std::unique_ptr<QSettings> m_settings;
+};
+
+class NetworkFetcher : public QObject {
+    Q_OBJECT
+public:
+    explicit NetworkFetcher(QObject *parent = nullptr);
+    void fetch(const QString &url, const QString &etag = {}, int timeoutMs = 20000);
+
+signals:
+    void finished(bool ok, bool notModified, const QByteArray &body,
+                  const QString &etag, const QString &error);
+
+private:
+    QNetworkAccessManager m_manager;
 };
 
 class Updater : public QObject {
