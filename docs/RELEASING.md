@@ -2,7 +2,7 @@
 
 Releases use Semantic Versioning and tags in the form `vMAJOR.MINOR.PATCH`.
 
-## Before tagging
+## Before release
 
 1. Ensure `main` is green on Windows, macOS, and Linux.
 2. Update the version in:
@@ -13,23 +13,24 @@ Releases use Semantic Versioning and tags in the form `vMAJOR.MINOR.PATCH`.
 5. Confirm the current upstream list passes `--validate-file`.
 6. Confirm release binaries are intentionally signed or intentionally unsigned.
 
-## Tag and release
+## Publish
 
-Create and push an annotated release tag:
+Set `.github/RELEASE` to the target tag and push the change to `main`:
 
-```bash
-git tag -a v0.1.0 -m "Amnezia VPN Tunnel Update v0.1.0"
-git push origin v0.1.0
+```text
+v0.2.0
 ```
 
-The release workflow builds packages for all configured platforms, creates SHA-256 checksums, and publishes/updates the matching GitHub Release.
+The release workflow verifies that the marker matches the application version, builds and tests all configured platforms, creates the tag when needed, generates SHA-256 checksums, and publishes the matching GitHub Release.
+
+If a tag already exists but the GitHub Release was not published, the workflow reuses that tag and publishes the release from the tagged commit.
 
 ## After release
 
 - Download each published package.
 - Verify `SHA256SUMS.txt`.
 - Smoke-test first launch.
-- Test `--status`, manual update, enabling scheduled updates, and uninstalling the schedule.
+- Test `--status`, manual update, enabling and disabling scheduled updates, and source selection.
 - Record platform-specific limitations in the release notes if necessary.
 
 ## Signing
