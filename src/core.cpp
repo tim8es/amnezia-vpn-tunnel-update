@@ -357,7 +357,10 @@ bool AmneziaSettings::splitTunnelingEnabled() const
 }
 
 Updater::Updater(AmneziaSettings &settings, StateStore &stateStore, QObject *parent)
-    : QObject(parent), m_settings(settings), m_stateStore(stateStore)
+    : QObject(parent),
+      m_settings(settings),
+      m_stateStore(stateStore),
+      m_networkManager(new QNetworkAccessManager(this))
 {
     // v0.2.x used pending.json while waiting for Amnezia to exit. That behavior
     // was removed: updates are now either applied immediately after an approved
@@ -530,7 +533,7 @@ UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
     QNetworkRequest request(QUrl(state.sourceUrl));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.3");
+    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.4");
     const bool skippedVersionPending =
         !state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256;
     if (!state.etag.isEmpty() && (respectSkipped || !skippedVersionPending))
@@ -574,6 +577,81 @@ UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
     reply->deleteLater();
     return updateFromBytes(body, isAmneziaRunning(), etag, respectSkipped);
 }
+
+void Updater::updateFromNetworkAsync(bool respectSkipped,
+                                     std::function<void(UpdateResult)> completion,
+                                     int timeoutMs)
+{
+    QString error;
+    State state;
+    if (!m_stateStore.load(state, error)) {
+        completion({UpdateStatus::Error, error, 0});
+        return;
+    }
+
+    if (state.sourceUrl.isEmpty())
+        state.sourceUrl = QString::fromLatin1(kDomainSourceUrl);
+
+    QNetworkRequest request(QUrl(state.sourceUrl));
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.4");
+
+    const bool skippedVersionPending =
+        !state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256;
+    if (!state.etag.isEmpty() && (respectSkipped || !skippedVersionPending))
+        request.setRawHeader("If-None-Match", state.etag.toUtf8());
+
+    QNetworkReply *reply = m_networkManager->get(request);
+    auto *timer = new QTimer(reply);
+    timer->setSingleShot(true);
+
+    QObject::connect(timer, &QTimer::timeout, reply, [reply]() {
+        reply->setProperty("amneziaTimedOut", true);
+        reply->abort();
+    });
+
+    QObject::connect(reply, &QNetworkReply::finished, this,
+                     [this, reply, timer, state, respectSkipped,
+                      completion = std::move(completion)]() mutable {
+        timer->stop();
+
+        UpdateResult result;
+        if (reply->property("amneziaTimedOut").toBool()) {
+            result = {UpdateStatus::Error, QStringLiteral("Download timed out."), 0};
+        } else {
+            const int httpStatus =
+                reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+            if (httpStatus == 304) {
+                if (!state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256) {
+                    result = {UpdateStatus::Skipped,
+                              QStringLiteral("This list version was previously skipped."),
+                              0, state.skippedSha256, state.etag};
+                } else {
+                    result = {UpdateStatus::Unchanged,
+                              QStringLiteral("The list is already up to date."),
+                              0, state.sourceSha256, state.etag};
+                }
+            } else if (reply->error() != QNetworkReply::NoError || httpStatus != 200) {
+                result = {UpdateStatus::Error,
+                          QStringLiteral("Download failed (HTTP %1): %2")
+                              .arg(httpStatus).arg(reply->errorString()),
+                          0};
+            } else {
+                const QByteArray body = reply->readAll();
+                const QString etag = QString::fromUtf8(reply->rawHeader("ETag"));
+                result = updateFromBytes(body, isAmneziaRunning(), etag, respectSkipped);
+            }
+        }
+
+        reply->deleteLater();
+        completion(result);
+    });
+
+    timer->start(timeoutMs);
+}
+
 
 bool Updater::isAmneziaRunning()
 {
