@@ -46,7 +46,13 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
+      - name: Test Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\\build\\Release\\amnezia-vpn-tunnel-update-tests.exe -v2
+
       - name: Test
+        if: runner.os != 'Windows'
         run: ctest --test-dir build -C Release --output-on-failure --verbose
 
       - name: Validate built-in upstream lists
