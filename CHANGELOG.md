@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-30
+
 ### Fixed
 
 - Kept the GUI responsive during update, source-apply, and scheduler operations.
