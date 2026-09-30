@@ -751,7 +751,16 @@ bool AmneziaProcess::stopForRestart(QString &restartTarget, QString &error, int 
 
     CloseWindowContext context;
     context.pid = processInfo.pid;
-    EnumWindows(closeWindowsForProcess, reinterpret_cast<LPARAM>(&context));
+
+    QElapsedTimer windowTimer;
+    windowTimer.start();
+    do {
+        context.sent = false;
+        EnumWindows(closeWindowsForProcess, reinterpret_cast<LPARAM>(&context));
+        if (context.sent)
+            break;
+        QThread::msleep(50);
+    } while (windowTimer.elapsed() < qMin(qMax(timeoutMs, 0), 2000));
 
     if (!context.sent) {
         CloseHandle(process);
