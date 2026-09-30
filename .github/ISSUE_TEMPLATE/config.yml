@@ -3,6 +3,3 @@ contact_links:
   - name: Support and scope
     url: https://github.com/tim8es/amnezia-vpn-tunnel-update/blob/main/SUPPORT.md
     about: Check where to report installation, compatibility, and upstream-list problems.
-  - name: Security policy
-    url: https://github.com/tim8es/amnezia-vpn-tunnel-update/blob/main/SECURITY.md
-    about: Do not publish vulnerability details in a normal issue.
