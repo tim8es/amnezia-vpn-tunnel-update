@@ -2,14 +2,17 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - ".github/RELEASE"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -17,18 +20,48 @@ jobs:
     name: Verify release metadata
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify tag matches project version
+      - name: Resolve and verify release version
+        id: release
         shell: bash
         run: |
-          VERSION="$(grep -oE 'project\(amnezia_vpn_tunnel_update VERSION [0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt | awk '{print $3}')"
+          set -euo pipefail
+
+          TAG="$(tr -d '[:space:]' < .github/RELEASE)"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag in .github/RELEASE: $TAG" >&2
+            exit 1
+          fi
+
+          VERSION="$(sed -n 's/^project(amnezia_vpn_tunnel_update VERSION \([0-9][0-9.]*\) LANGUAGES CXX)$/\1/p' CMakeLists.txt)"
           test -n "$VERSION"
-          test "v$VERSION" = "$GITHUB_REF_NAME"
+          test "v$VERSION" = "$TAG"
           grep -F "setApplicationVersion(QStringLiteral(\"$VERSION\"))" src/main.cpp
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release metadata verified: $TAG"
+
+      - name: Ensure release does not already exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists." >&2
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists." >&2
+            exit 1
+          fi
 
   build:
     name: Build release (${{ matrix.os }})
@@ -122,9 +155,12 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      TAG: ${{ needs.preflight.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Download release packages
@@ -137,20 +173,24 @@ jobs:
       - name: Generate SHA-256 checksums
         shell: bash
         run: |
+          set -euo pipefail
           cd dist
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Create or update GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Create release tag
         shell: bash
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" dist/* \
-              --verify-tag \
-              --generate-notes \
-              --title "Amnezia VPN Tunnel Update $GITHUB_REF_NAME"
-          fi
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$TAG" \
+            -f sha="$GITHUB_SHA"
+
+      - name: Publish GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --generate-notes \
+            --title "Amnezia VPN Tunnel Update $TAG"
