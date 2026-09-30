@@ -1,0 +1,133 @@
+# Architecture
+
+## Purpose
+
+Amnezia VPN Tunnel Update keeps Amnezia VPN's split-tunneling exception list synchronized with a remote domain list without modifying the Amnezia client.
+
+The application is intentionally small: there is no daemon, privileged service, database, or embedded web server.
+
+## Data flow
+
+```text
+upstream amnezia.json
+        |
+        v
+ network fetch (ETag)
+        |
+        v
+ parse + validate
+        |
+        +---- invalid / empty / suspicious shrink ----> stop, no settings write
+        |
+        v
+ SHA-256 comparison
+        |
+        +---- unchanged ------------------------------> stop
+        |
+        v
+ Is Amnezia VPN running?
+        |
+   yes  +----> save pending update
+        |
+    no
+        v
+ load current Conf/ExceptSites
+        |
+        v
+ separate user entries from previous updater-managed entries
+        |
+        v
+ merge user entries + new managed entries
+        |
+        v
+ backup current settings
+        |
+        v
+ write Conf/ExceptSites via QSettings
+        |
+        v
+ atomically persist updater state
+```
+
+## Main components
+
+### `ListCodec`
+
+Parses and validates the upstream JSON, normalizes hostnames/IP values, computes the managed representation, and handles backup serialization.
+
+### `AmneziaSettings`
+
+Uses Qt `QSettings("AmneziaVPN.ORG", "AmneziaVPN")` to interact with the same settings namespace as Amnezia VPN.
+
+The updater manages `Conf/ExceptSites` only. It reads routing state for status display but does not intentionally change:
+
+- `Conf/routeMode`;
+- `Conf/sitesSplitTunnelingEnabled`;
+- VPN server configuration;
+- VPN protocol configuration.
+
+### `StateStore`
+
+Stores updater-owned state separately from Amnezia settings. State includes the last source digest, ETag, managed-domain identity, and pending-update metadata.
+
+Backups are stored in the updater's per-user data directory.
+
+### `Updater`
+
+Coordinates network fetch, pending-update handling, validation, safety checks, merging, backup, write, rollback attempts, and state persistence.
+
+### `Installer` and `Scheduler`
+
+Copies the packaged updater to a stable per-user location and registers short periodic executions:
+
+| OS | Scheduler |
+| --- | --- |
+| Windows | Task Scheduler |
+| macOS | LaunchAgent |
+| Linux | systemd user timer |
+
+The updater is not intended to stay resident in memory.
+
+## Ownership model
+
+The updater remembers which domains it previously managed.
+
+```text
+user entries = current Amnezia entries - previous managed set
+result       = user entries + new managed set
+```
+
+This lets upstream removals take effect while preserving unrelated domains created manually by the user.
+
+Hostname identity is the ownership boundary in the current version. A manually modified IP list for a hostname that is also upstream-managed may still be treated as updater-owned.
+
+## Failure behavior
+
+The design favors no change over an uncertain change.
+
+Examples:
+
+- invalid JSON -> no write;
+- empty valid JSON -> no write;
+- no recognizable Amnezia configuration -> no write;
+- Amnezia is running -> pending update instead of direct write;
+- large unexpected upstream shrink -> no write;
+- state-save failure after a settings write -> rollback attempt.
+
+## Trust boundaries
+
+### Upstream data
+
+The upstream repository is trusted to choose the intended domains. Local validation verifies format and guards against several accidental/corrupt states, but does not establish editorial correctness of each domain.
+
+### Local Amnezia settings
+
+The updater assumes the compatible QSettings schema remains available. Schema changes in Amnezia VPN may require updater changes.
+
+### Operating-system scheduler
+
+Scheduler registration is per-user and does not require a privileged background service.
+
+## Privacy
+
+See [../PRIVACY.md](../PRIVACY.md).

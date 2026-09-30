@@ -1,20 +1,38 @@
-name: CI
+name: Release
 
 on:
   push:
-  pull_request:
-  workflow_dispatch:
+    tags:
+      - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-test:
-    name: Build and test (${{ matrix.os }})
+  preflight:
+    name: Verify release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches project version
+        shell: bash
+        run: |
+          VERSION="$(grep -oE 'project\(amnezia_vpn_tunnel_update VERSION [0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt | awk '{print $3}')"
+          test -n "$VERSION"
+          test "v$VERSION" = "$GITHUB_REF_NAME"
+          grep -F "setApplicationVersion(QStringLiteral(\"$VERSION\"))" src/main.cpp
+
+  build:
+    name: Build release (${{ matrix.os }})
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -91,29 +109,48 @@ jobs:
           macdeployqt "build/amnezia-vpn-tunnel-update.app" -dmg
           mv "build/amnezia-vpn-tunnel-update.dmg" amnezia-vpn-tunnel-update-macos.dmg
 
-      - name: Upload Windows package
-        if: runner.os == 'Windows'
+      - name: Upload release package
         uses: actions/upload-artifact@v4
         with:
-          name: amnezia-vpn-tunnel-update-windows-x64
-          path: amnezia-vpn-tunnel-update-windows-x64.zip
-          retention-days: 14
+          name: release-${{ runner.os }}
+          path: |
+            amnezia-vpn-tunnel-update-*.zip
+            amnezia-vpn-tunnel-update-*.dmg
+            amnezia-vpn-tunnel-update-*.AppImage
           if-no-files-found: error
+          retention-days: 7
 
-      - name: Upload macOS package
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: amnezia-vpn-tunnel-update-macos
-          path: amnezia-vpn-tunnel-update-macos.dmg
-          retention-days: 14
-          if-no-files-found: error
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
-      - name: Upload Linux package
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@v4
         with:
-          name: amnezia-vpn-tunnel-update-linux-x86_64
-          path: amnezia-vpn-tunnel-update-linux-x86_64.AppImage
-          retention-days: 14
-          if-no-files-found: error
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --verify-tag \
+              --generate-notes \
+              --title "Amnezia VPN Tunnel Update $GITHUB_REF_NAME"
+          fi

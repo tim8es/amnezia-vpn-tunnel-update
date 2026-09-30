@@ -1,0 +1,96 @@
+name: Bug report
+description: Report a reproducible problem in Amnezia VPN Tunnel Update
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please remove secrets, VPN credentials, and other sensitive data before posting logs.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: This is an updater problem, not a request to change the upstream domain list.
+          required: true
+        - label: I removed sensitive information from logs and screenshots.
+          required: true
+
+  - type: input
+    id: updater-version
+    attributes:
+      label: Updater version / commit
+      description: For example v0.1.0 or a commit SHA.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: amnezia-version
+    attributes:
+      label: Amnezia VPN version
+      placeholder: Version shown by Amnezia VPN
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version / architecture
+      placeholder: Windows 11 x64, macOS 15 arm64, Ubuntu 24.04 x86_64
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest reliable sequence that reproduces the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: Paste CLI output or logs with sensitive information removed.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Installation source, scheduler state, screenshots, or anything else that may help.
