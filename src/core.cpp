@@ -127,11 +127,11 @@ bool ListCodec::parse(const QByteArray &json, ParsedList &out, QString &error)
 
     const QJsonArray array = doc.array();
     if (array.isEmpty()) {
-        error = QStringLiteral("Refusing to apply an empty domain list");
+        error = QStringLiteral("Refusing to apply an empty list");
         return false;
     }
     if (array.size() > 100000) {
-        error = QStringLiteral("Domain list is unexpectedly large");
+        error = QStringLiteral("List is unexpectedly large");
         return false;
     }
 
@@ -160,7 +160,7 @@ bool ListCodec::parse(const QByteArray &json, ParsedList &out, QString &error)
     }
 
     if (sites.isEmpty()) {
-        error = QStringLiteral("No valid Amnezia hostnames were found");
+        error = QStringLiteral("No valid Amnezia entries were found");
         return false;
     }
 
