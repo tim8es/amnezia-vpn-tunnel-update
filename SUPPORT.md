@@ -31,10 +31,6 @@ If a domain is missing from or incorrectly included in the source list itself, t
 
 This repository is responsible for safely consuming the list, not maintaining its contents.
 
-## Security issues
-
-Do not disclose vulnerability details in a normal support issue. Follow [SECURITY.md](SECURITY.md).
-
 ## Scope
 
 This is an independent, unofficial project and is not an Amnezia VPN support channel.
