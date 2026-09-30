@@ -27,7 +27,11 @@ selected JSON source
         v
  Is Amnezia VPN running?
         |
-   yes  +----> save pending update
+   yes  +----> prompt: restart now / skip
+        |           |
+        |           +---- skip ----> store skipped SHA/ETag -> stop
+        |           |
+        |           +---- restart -> graceful stop -> continue
         |
     no
         v
@@ -68,13 +72,13 @@ The updater manages `Conf/ExceptSites` only. It reads routing state for status d
 
 ### `StateStore`
 
-Stores updater-owned state separately from Amnezia settings. State includes the selected source URL, last source digest, ETag, managed-entry identity, source-transition state, and pending-update metadata.
+Stores updater-owned state separately from Amnezia settings. State includes the selected source URL, last applied digest, ETag, the last explicitly skipped digest, managed-entry identity, and source-transition state.
 
 Backups are stored in the updater's per-user data directory.
 
 ### `Updater`
 
-Coordinates source selection, network fetch, pending-update handling, validation, safety checks, merging, backup, write, rollback attempts, and state persistence. When the source changes, the updater keeps ownership of the previous managed set long enough to remove it safely, clears source-specific ETag/hash state, and skips the ordinary shrink guard for that one intentional transition.
+Coordinates source selection, network fetch, restart decisions, validation, safety checks, merging, backup, write, rollback attempts, and state persistence. When the source changes, the updater keeps ownership of the previous managed set long enough to remove it safely, clears source-specific ETag/hash state, and skips the ordinary shrink guard for that one intentional transition.
 
 ### `Installer` and `Scheduler`
 
@@ -110,7 +114,7 @@ Examples:
 - invalid JSON -> no write;
 - empty valid JSON -> no write;
 - no recognizable Amnezia configuration -> no write;
-- Amnezia is running -> pending update instead of direct write;
+- Amnezia is running -> no settings write until the user explicitly approves a restart;
 - large unexpected upstream shrink -> no write;
 - state-save failure after a settings write -> rollback attempt.
 
@@ -124,9 +128,13 @@ The upstream repository is trusted to choose the intended domains. Local validat
 
 The updater assumes the compatible QSettings schema remains available. Schema changes in Amnezia VPN may require updater changes.
 
+### Amnezia restart
+
+For an approved update, the updater requests a normal application shutdown, waits for the Amnezia GUI process to exit, applies the validated list, and starts Amnezia again. It never force-kills the client as part of the normal update flow.
+
 ### Operating-system scheduler
 
-Scheduler registration is per-user and does not require a privileged background service.
+Scheduler registration is per-user and does not require a privileged background service. Scheduled checks use the same restart/skip decision when a new list is found while Amnezia is running.
 
 ## Privacy
 
