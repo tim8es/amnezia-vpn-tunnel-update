@@ -9,7 +9,7 @@ Releases use Semantic Versioning and tags in the form `vMAJOR.MINOR.PATCH`.
    - `CMakeLists.txt`;
    - `QCoreApplication::setApplicationVersion` in `src/main.cpp`.
 3. Move user-visible entries from `[Unreleased]` in `CHANGELOG.md` into a versioned section with the release date.
-4. Review `README.md`, `README.en.md`, `SECURITY.md`, and known limitations.
+4. Review `README.md`, `README.en.md`, and known limitations.
 5. Confirm the current upstream list passes `--validate-file`.
 6. Confirm release binaries are intentionally signed or intentionally unsigned.
 
