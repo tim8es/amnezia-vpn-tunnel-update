@@ -431,6 +431,36 @@ private slots:
 #endif
     }
 
+    void windowsGracefulStopAndRestartCycle()
+    {
+#ifdef Q_OS_WIN
+        const QString helper = QDir(QCoreApplication::applicationDirPath())
+                                   .filePath(QStringLiteral("AmneziaVPN.exe"));
+        QVERIFY2(QFile::exists(helper), qPrintable(helper));
+
+        QProcess process;
+        process.start(helper);
+        QVERIFY2(process.waitForStarted(3000), qPrintable(process.errorString()));
+        QTRY_VERIFY_WITH_TIMEOUT(Updater::isAmneziaRunning(), 3000);
+
+        QString restartTarget;
+        QString error;
+        QVERIFY2(AmneziaProcess::stopForRestart(restartTarget, error, 5000), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(!Updater::isAmneziaRunning(), 3000);
+        QVERIFY(!restartTarget.isEmpty());
+        QCOMPARE(QDir::cleanPath(restartTarget), QDir::cleanPath(helper));
+
+        QVERIFY2(AmneziaProcess::startAfterRestart(restartTarget, error), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(Updater::isAmneziaRunning(), 5000);
+
+        QString cleanupTarget;
+        QVERIFY2(AmneziaProcess::stopForRestart(cleanupTarget, error, 5000), qPrintable(error));
+        QTRY_VERIFY_WITH_TIMEOUT(!Updater::isAmneziaRunning(), 3000);
+#else
+        QSKIP("Windows-only graceful restart integration test");
+#endif
+    }
+
     void networkFetcherReturns200ExactlyOnce()
     {
         QTcpServer server;
