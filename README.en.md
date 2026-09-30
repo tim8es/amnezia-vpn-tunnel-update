@@ -50,25 +50,9 @@ The utility does not patch the Amnezia client, install drivers, or stay resident
 
 No administrator/root privileges are required.
 
-## Safety boundaries
-
-The updater is not intended to automatically modify:
-
-- VPN server configuration;
-- VPN protocol configuration;
-- `Conf/routeMode`;
-- `Conf/sitesSplitTunnelingEnabled`;
-- unrelated Amnezia VPN settings.
-
-Before a settings change it rejects invalid/empty data, protects against suspicious large list shrinkage, preserves user entries, creates a backup, defers writes while Amnezia is running, and fails closed on unknown configurations.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [SECURITY.md](SECURITY.md).
-
 ## Installation
 
 Use [GitHub Releases](https://github.com/tim8es/amnezia-vpn-tunnel-update/releases) for published versions.
-
-If there is no tagged release yet, artifacts from the latest successful [CI run](https://github.com/tim8es/amnezia-vpn-tunnel-update/actions/workflows/ci.yml) are development builds.
 
 Current package formats:
 
@@ -127,14 +111,6 @@ ctest --test-dir build -C Release --output-on-failure
 - [CHANGELOG.md](CHANGELOG.md) — project changes
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design and trust boundaries
 - [docs/RELEASING.md](docs/RELEASING.md) — release process
-
-## Known limitations
-
-- development builds are unsigned;
-- a universal macOS binary is not currently guaranteed;
-- the Linux artifact currently targets x86_64;
-- the utility updates the list, not itself;
-- upstream list correctness remains a separate trust dependency.
 
 ## Contributing
 
