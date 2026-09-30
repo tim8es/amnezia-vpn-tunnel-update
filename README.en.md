@@ -81,14 +81,14 @@ Running without arguments opens the GUI.
 
 ## User-owned entries
 
-The updater tracks the hostnames it manages:
+The updater tracks the domain and IP/CIDR entries it manages:
 
 ```text
 user entries = current Amnezia entries - previous managed set
 result       = user entries + new managed set
 ```
 
-This allows upstream removals to take effect while preserving unrelated user entries.
+This allows source-list removals to take effect while preserving unrelated user entries.
 
 Current limitation: hostname identity is the ownership boundary. Manual IP changes for a hostname that is also upstream-managed may still be treated as updater-managed.
 
