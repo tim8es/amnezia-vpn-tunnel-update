@@ -1,6 +1,28 @@
+# Build output
 build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Packaged artifacts
 AppDir/
 *.AppImage
 *.dmg
 *.zip
+
+# IDE / editor
+.vscode/
+.idea/
+*.user
+*.user.*
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Local test/download artifacts
+upstream-amnezia.json
