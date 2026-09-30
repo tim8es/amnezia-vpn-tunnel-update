@@ -2,11 +2,13 @@
 
 #include <QByteArray>
 #include <QMap>
+#include <QNetworkAccessManager>
 #include <QObject>
 #include <QSettings>
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <memory>
 
 namespace AmneziaUpdater {
@@ -106,6 +108,9 @@ public:
     UpdateResult updateFromBytes(const QByteArray &json, bool amneziaRunning,
                                  const QString &etag = {}, bool respectSkipped = true);
     UpdateResult updateFromNetwork(bool respectSkipped = true, int timeoutMs = 20000);
+    void updateFromNetworkAsync(bool respectSkipped,
+                                std::function<void(UpdateResult)> completion,
+                                int timeoutMs = 20000);
 
     static bool isAmneziaRunning();
 
@@ -116,6 +121,7 @@ private:
                              const QString &etag);
     AmneziaSettings &m_settings;
     StateStore &m_stateStore;
+    QNetworkAccessManager *m_networkManager = nullptr;
 };
 
 class AmneziaProcess {
