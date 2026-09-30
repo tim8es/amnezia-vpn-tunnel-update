@@ -17,7 +17,6 @@
 #include <QtConcurrent>
 
 #include <functional>
-#include <optional>
 
 using namespace AmneziaUpdater;
 
@@ -630,13 +629,15 @@ int main(int argc, char *argv[])
     };
 
     QObject::connect(skipRestart, &QPushButton::clicked, &window, [&]() {
-        if (pendingSkipAction)
-            pendingSkipAction();
+        const auto action = pendingSkipAction;
+        if (action)
+            action();
     });
 
     QObject::connect(restartNow, &QPushButton::clicked, &window, [&]() {
-        if (pendingRestartAction)
-            pendingRestartAction();
+        const auto action = pendingRestartAction;
+        if (action)
+            action();
     });
 
     QObject::connect(sourceCombo, &QComboBox::currentIndexChanged, &window, [&](int) {
