@@ -2,14 +2,14 @@
 
 ## Purpose
 
-Amnezia VPN Tunnel Update keeps Amnezia VPN's split-tunneling exception list synchronized with a remote domain list without modifying the Amnezia client.
+Amnezia VPN Tunnel Update keeps Amnezia VPN's split-tunneling exception list synchronized with a selected remote JSON list without modifying the Amnezia client. Sources may contain domains, IPv4 addresses, or IPv4 CIDR networks.
 
 The application is intentionally small: there is no daemon, privileged service, database, or embedded web server.
 
 ## Data flow
 
 ```text
-upstream amnezia.json
+selected JSON source
         |
         v
  network fetch (ETag)
@@ -68,13 +68,13 @@ The updater manages `Conf/ExceptSites` only. It reads routing state for status d
 
 ### `StateStore`
 
-Stores updater-owned state separately from Amnezia settings. State includes the last source digest, ETag, managed-domain identity, and pending-update metadata.
+Stores updater-owned state separately from Amnezia settings. State includes the selected source URL, last source digest, ETag, managed-entry identity, source-transition state, and pending-update metadata.
 
 Backups are stored in the updater's per-user data directory.
 
 ### `Updater`
 
-Coordinates network fetch, pending-update handling, validation, safety checks, merging, backup, write, rollback attempts, and state persistence.
+Coordinates source selection, network fetch, pending-update handling, validation, safety checks, merging, backup, write, rollback attempts, and state persistence. When the source changes, the updater keeps ownership of the previous managed set long enough to remove it safely, clears source-specific ETag/hash state, and skips the ordinary shrink guard for that one intentional transition.
 
 ### `Installer` and `Scheduler`
 
@@ -90,14 +90,14 @@ The updater is not intended to stay resident in memory.
 
 ## Ownership model
 
-The updater remembers which domains it previously managed.
+The updater remembers which entries it previously managed.
 
 ```text
 user entries = current Amnezia entries - previous managed set
 result       = user entries + new managed set
 ```
 
-This lets upstream removals take effect while preserving unrelated domains created manually by the user.
+This lets upstream removals take effect while preserving unrelated entries created manually by the user.
 
 Hostname identity is the ownership boundary in the current version. A manually modified IP list for a hostname that is also upstream-managed may still be treated as updater-owned.
 
