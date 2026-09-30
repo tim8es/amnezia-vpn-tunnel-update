@@ -99,7 +99,7 @@ Requirements:
 
 - CMake 3.21+;
 - C++17;
-- Qt 6.5+ with Core, Network, Widgets, and Test.
+- Qt 6.5+ with Core, Network, Widgets, Concurrent, and Test.
 
 ```bash
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
