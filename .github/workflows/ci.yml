@@ -1,0 +1,109 @@
+name: Amnezia VPN Tunnel Update CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amnezia-vpn-tunnel-update-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.10.3"
+          cache: true
+
+      - name: Install LinuxDeploy
+        if: runner.os == 'Linux'
+        id: linuxdeploy
+        uses: miurahr/install-linuxdeploy-action@v1.8.0
+        with:
+          plugins: qt appimage
+
+      - name: Configure
+        run: cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Validate current upstream list
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          curl -fsSL "https://github.com/lib4u/amnezia-tunneling-ru/releases/download/latest/amnezia.json" -o upstream-amnezia.json
+          ./build/amnezia-vpn-tunnel-update --validate-file upstream-amnezia.json
+
+      - name: Package Linux AppImage
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ${{ steps.linuxdeploy.outputs.linuxdeploy }} \
+            --plugin=qt \
+            --output=appimage \
+            --create-desktop-file \
+            --executable=build/amnezia-vpn-tunnel-update \
+            --appdir=AppDir \
+            --icon-file=assets/amnezia-vpn-tunnel-update.svg
+          APPIMAGE="$(find . -maxdepth 1 -type f -name '*.AppImage' ! -name 'linuxdeploy*' | head -n 1)"
+          test -n "$APPIMAGE"
+          mv "$APPIMAGE" amnezia-vpn-tunnel-update-linux-x86_64.AppImage
+
+      - name: Package Windows portable build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item build/Release/amnezia-vpn-tunnel-update.exe package/
+          windeployqt package/amnezia-vpn-tunnel-update.exe --release --no-translations --dir package
+          Get-ChildItem package -Recurse -File |
+            ForEach-Object { $_.FullName.Substring((Resolve-Path package).Path.Length + 1).Replace('\','/') } |
+            Set-Content package/runtime.manifest
+          Compress-Archive -Path package/* -DestinationPath amnezia-vpn-tunnel-update-windows-x64.zip
+
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        run: |
+          macdeployqt "build/amnezia-vpn-tunnel-update.app" -dmg
+          mv "build/amnezia-vpn-tunnel-update.dmg" amnezia-vpn-tunnel-update-macos.dmg
+
+      - name: Upload Windows package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: amnezia-vpn-tunnel-update-windows-x64
+          path: amnezia-vpn-tunnel-update-windows-x64.zip
+
+      - name: Upload macOS package
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: amnezia-vpn-tunnel-update-macos
+          path: amnezia-vpn-tunnel-update-macos.dmg
+
+      - name: Upload Linux package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: amnezia-vpn-tunnel-update-linux-x86_64
+          path: amnezia-vpn-tunnel-update-linux-x86_64.AppImage
