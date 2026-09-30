@@ -9,6 +9,11 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QSettings>
+#include <QSignalSpy>
+#include <QProcess>
+#include <QCoreApplication>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 
 using namespace AmneziaUpdater;
@@ -401,6 +406,128 @@ private slots:
         error.clear();
         QVERIFY2(updater.setSourceUrl(QStringLiteral("https://example.com/list.json"), error), qPrintable(error));
         QCOMPARE(updater.sourceUrl(), QStringLiteral("https://example.com/list.json"));
+    }
+
+    void windowsDetectsRunningAmneziaProcess()
+    {
+#ifdef Q_OS_WIN
+        const QString helper = QDir(QCoreApplication::applicationDirPath())
+                                   .filePath(QStringLiteral("AmneziaVPN.exe"));
+        QVERIFY2(QFile::exists(helper), qPrintable(helper));
+
+        QProcess process;
+        process.start(helper);
+        QVERIFY2(process.waitForStarted(3000), qPrintable(process.errorString()));
+
+        QTRY_VERIFY_WITH_TIMEOUT(Updater::isAmneziaRunning(), 3000);
+
+        process.terminate();
+        if (!process.waitForFinished(3000))
+            process.kill();
+        process.waitForFinished(3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!Updater::isAmneziaRunning(), 3000);
+#else
+        QSKIP("Windows-only process detection integration test");
+#endif
+    }
+
+    void networkFetcherReturns200ExactlyOnce()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+
+        QObject::connect(&server, &QTcpServer::newConnection, &server, [&]() {
+            QTcpSocket *socket = server.nextPendingConnection();
+            QVERIFY(socket);
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket]() {
+                socket->readAll();
+                const QByteArray body = QByteArrayLiteral("[{\"hostname\":\"example.ru\",\"ip\":\"\"}]");
+                const QByteArray response =
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: application/json\r\n"
+                    "ETag: test-etag\r\n"
+                    "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
+                    "Connection: close\r\n\r\n" + body;
+                socket->write(response);
+                socket->disconnectFromHost();
+            });
+        });
+
+        NetworkFetcher fetcher;
+        QSignalSpy spy(&fetcher, &NetworkFetcher::finished);
+        fetcher.fetch(QStringLiteral("http://127.0.0.1:%1/list.json").arg(server.serverPort()), {}, 1000);
+
+        QTRY_COMPARE_WITH_TIMEOUT(spy.count(), 1, 2000);
+        const QList<QVariant> args = spy.takeFirst();
+        QCOMPARE(args.at(0).toBool(), true);
+        QCOMPARE(args.at(1).toBool(), false);
+        QVERIFY(!args.at(2).toByteArray().isEmpty());
+        QCOMPARE(args.at(3).toString(), QStringLiteral("test-etag"));
+        QVERIFY(args.at(4).toString().isEmpty());
+    }
+
+    void networkFetcherReturns304ExactlyOnce()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+
+        QObject::connect(&server, &QTcpServer::newConnection, &server, [&]() {
+            QTcpSocket *socket = server.nextPendingConnection();
+            QVERIFY(socket);
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket]() {
+                socket->readAll();
+                socket->write(
+                    "HTTP/1.1 304 Not Modified\r\n"
+                    "ETag: test-etag\r\n"
+                    "Connection: close\r\n\r\n");
+                socket->disconnectFromHost();
+            });
+        });
+
+        NetworkFetcher fetcher;
+        QSignalSpy spy(&fetcher, &NetworkFetcher::finished);
+        fetcher.fetch(QStringLiteral("http://127.0.0.1:%1/list.json").arg(server.serverPort()),
+                      QStringLiteral("test-etag"), 1000);
+
+        QTRY_COMPARE_WITH_TIMEOUT(spy.count(), 1, 2000);
+        const QList<QVariant> args = spy.takeFirst();
+        QCOMPARE(args.at(0).toBool(), true);
+        QCOMPARE(args.at(1).toBool(), true);
+        QVERIFY(args.at(2).toByteArray().isEmpty());
+        QCOMPARE(args.at(3).toString(), QStringLiteral("test-etag"));
+    }
+
+    void networkFetcherTimesOutExactlyOnce()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+
+        QList<QTcpSocket *> heldSockets;
+        QObject::connect(&server, &QTcpServer::newConnection, &server, [&]() {
+            while (server.hasPendingConnections()) {
+                QTcpSocket *socket = server.nextPendingConnection();
+                QVERIFY(socket);
+                heldSockets.append(socket);
+                QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket]() {
+                    socket->readAll(); // Intentionally never respond.
+                });
+            }
+        });
+
+        NetworkFetcher fetcher;
+        QSignalSpy spy(&fetcher, &NetworkFetcher::finished);
+        fetcher.fetch(QStringLiteral("http://127.0.0.1:%1/hang").arg(server.serverPort()), {}, 100);
+
+        QTRY_COMPARE_WITH_TIMEOUT(spy.count(), 1, 1500);
+        const QList<QVariant> args = spy.at(0);
+        QCOMPARE(args.at(0).toBool(), false);
+        QVERIFY(args.at(4).toString().contains(QStringLiteral("timed out"), Qt::CaseInsensitive));
+
+        QTest::qWait(250);
+        QCOMPARE(spy.count(), 1);
+
+        for (QTcpSocket *socket : heldSockets)
+            socket->deleteLater();
     }
 
     void invalidUpdateNeverTouchesSettings()
