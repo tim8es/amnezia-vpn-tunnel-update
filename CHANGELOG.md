@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-30
+
 ### Fixed
 
 - Manual **Apply source** and **Update now** actions can retry a list version that was previously skipped.
