@@ -259,9 +259,13 @@ bool StateStore::load(State &state, QString &error) const
         return false;
     }
     const QJsonObject o = doc.object();
+    state.sourceUrl = o.value(QStringLiteral("sourceUrl")).toString();
+    if (state.sourceUrl.isEmpty())
+        state.sourceUrl = QString::fromLatin1(kDomainSourceUrl);
     state.sourceSha256 = o.value(QStringLiteral("sourceSha256")).toString();
     state.etag = o.value(QStringLiteral("etag")).toString();
     state.pendingSha256 = o.value(QStringLiteral("pendingSha256")).toString();
+    state.sourceTransitionPending = o.value(QStringLiteral("sourceTransitionPending")).toBool(false);
     for (const auto &v : o.value(QStringLiteral("managedDomains")).toArray())
         state.managedDomains.append(v.toString());
     state.managedDomains.removeDuplicates();
@@ -271,10 +275,13 @@ bool StateStore::load(State &state, QString &error) const
 bool StateStore::save(const State &state, QString &error) const
 {
     QJsonObject o;
-    o.insert(QStringLiteral("version"), 1);
+    o.insert(QStringLiteral("version"), 2);
+    o.insert(QStringLiteral("sourceUrl"),
+             state.sourceUrl.isEmpty() ? QString::fromLatin1(kDomainSourceUrl) : state.sourceUrl);
     o.insert(QStringLiteral("sourceSha256"), state.sourceSha256);
     o.insert(QStringLiteral("etag"), state.etag);
     o.insert(QStringLiteral("pendingSha256"), state.pendingSha256);
+    o.insert(QStringLiteral("sourceTransitionPending"), state.sourceTransitionPending);
     QJsonArray managed;
     for (const QString &domain : state.managedDomains)
         managed.append(domain);
@@ -366,6 +373,53 @@ Updater::Updater(AmneziaSettings &settings, StateStore &stateStore, QObject *par
 {
 }
 
+QString Updater::sourceUrl() const
+{
+    State state;
+    QString error;
+    if (!m_stateStore.load(state, error) || state.sourceUrl.isEmpty())
+        return QString::fromLatin1(kDomainSourceUrl);
+    return state.sourceUrl;
+}
+
+bool Updater::validateSourceUrl(const QString &url, QString &normalizedUrl, QString &error)
+{
+    const QUrl parsed = QUrl::fromUserInput(url.trimmed());
+    if (!parsed.isValid() || parsed.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) != 0
+        || parsed.host().isEmpty()) {
+        error = QStringLiteral("Source must be a valid HTTPS URL.");
+        return false;
+    }
+
+    normalizedUrl = parsed.adjusted(QUrl::NormalizePathSegments).toString(QUrl::FullyEncoded);
+    return true;
+}
+
+bool Updater::setSourceUrl(const QString &url, QString &error)
+{
+    QString normalized;
+    if (!validateSourceUrl(url, normalized, error))
+        return false;
+
+    State state;
+    if (!m_stateStore.load(state, error))
+        return false;
+
+    const QString current = state.sourceUrl.isEmpty()
+        ? QString::fromLatin1(kDomainSourceUrl)
+        : state.sourceUrl;
+    if (current == normalized)
+        return true;
+
+    state.sourceUrl = normalized;
+    state.sourceSha256.clear();
+    state.etag.clear();
+    state.pendingSha256.clear();
+    state.sourceTransitionPending = true;
+    m_stateStore.clearPending();
+    return m_stateStore.save(state, error);
+}
+
 UpdateResult Updater::applyParsed(const QByteArray &sourceJson,
                                   const ParsedList &parsed,
                                   State state,
@@ -392,6 +446,7 @@ UpdateResult Updater::applyParsed(const QByteArray &sourceJson,
         state.etag = etag;
     state.managedDomains = parsed.sites.keys();
     state.pendingSha256.clear();
+    state.sourceTransitionPending = false;
 
     if (!m_stateStore.save(state, error)) {
         QString rollbackError;
@@ -423,7 +478,8 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
 
     // Guard against a valid-but-broken upstream release that would otherwise
     // remove a large portion of the previously managed list automatically.
-    if (state.managedDomains.size() >= 100
+    if (!state.sourceTransitionPending
+        && state.managedDomains.size() >= 100
         && parsed.sites.size() * 2 < state.managedDomains.size()) {
         return {UpdateStatus::Error,
                 QStringLiteral("Refusing suspicious update: managed list would shrink from %1 to %2 entries.")
@@ -433,7 +489,7 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
 
     const QString hash = QString::fromLatin1(parsed.sha256);
     if (hash == state.sourceSha256 && state.pendingSha256.isEmpty())
-        return {UpdateStatus::Unchanged, QStringLiteral("The domain list is already up to date."),
+        return {UpdateStatus::Unchanged, QStringLiteral("The list is already up to date."),
                 static_cast<int>(parsed.sites.size())};
 
     if (amneziaRunning) {
@@ -488,8 +544,11 @@ UpdateResult Updater::updateFromNetwork(bool amneziaRunning, int timeoutMs)
     if (!m_stateStore.load(state, error))
         return {UpdateStatus::Error, error, 0};
 
+    if (state.sourceUrl.isEmpty())
+        state.sourceUrl = QString::fromLatin1(kDomainSourceUrl);
+
     QNetworkAccessManager manager;
-    QNetworkRequest request(QUrl(QString::fromLatin1(kSourceUrl)));
+    QNetworkRequest request(QUrl(state.sourceUrl));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.1");
@@ -517,7 +576,7 @@ UpdateResult Updater::updateFromNetwork(bool amneziaRunning, int timeoutMs)
         reply->deleteLater();
         return pending.status == UpdateStatus::Updated
             ? pending
-            : UpdateResult{UpdateStatus::Unchanged, QStringLiteral("The domain list is already up to date."), 0};
+            : UpdateResult{UpdateStatus::Unchanged, QStringLiteral("The list is already up to date."), 0};
     }
 
     if (reply->error() != QNetworkReply::NoError || httpStatus != 200) {
@@ -631,6 +690,25 @@ bool Scheduler::install(const QString &programPath, QString &error)
         return false;
     }
     return true;
+#endif
+}
+
+bool Scheduler::isInstalled()
+{
+#ifdef Q_OS_WIN
+    QProcess process;
+    process.start(QStringLiteral("schtasks"),
+                  {QStringLiteral("/Query"), QStringLiteral("/TN"),
+                   QStringLiteral("Amnezia VPN Tunnel Update")});
+    if (!process.waitForFinished(5000))
+        return false;
+    return process.exitCode() == 0;
+#elif defined(Q_OS_MACOS)
+    return QFile::exists(QDir::home().filePath(
+        QStringLiteral("Library/LaunchAgents/io.github.tim8es.amnezia-vpn-tunnel-update.plist")));
+#else
+    return QFile::exists(QDir(QDir::home().filePath(QStringLiteral(".config/systemd/user")))
+                             .filePath(QStringLiteral("amnezia-vpn-tunnel-update.timer")));
 #endif
 }
 
