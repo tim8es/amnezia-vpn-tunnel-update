@@ -140,18 +140,15 @@ Release workflow запускается на тегах `v*`, собирает �
 
 | Документ | Назначение |
 | --- | --- |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Как предложить изменение |
-| [SECURITY.md](SECURITY.md) | Уязвимости и security model |
 | [PRIVACY.md](PRIVACY.md) | Какие данные читает/отправляет приложение |
 | [SUPPORT.md](SUPPORT.md) | Куда обращаться с проблемами |
-| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Правила участия |
 | [CHANGELOG.md](CHANGELOG.md) | История изменений |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Архитектура и trust boundaries |
 | [docs/RELEASING.md](docs/RELEASING.md) | Процесс релиза |
 
 ## Участие в разработке
 
-Issues и pull requests приветствуются. Перед изменениями прочитайте [CONTRIBUTING.md](CONTRIBUTING.md).
+Issues и pull requests приветствуются.
 
 Для проблем с **самим содержимым списка доменов** используйте upstream-репозиторий: [lib4u/amnezia-tunneling-ru](https://github.com/lib4u/amnezia-tunneling-ru).
 
