@@ -509,7 +509,7 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
     return applyParsed(json, parsed, state, etag);
 }
 
-UpdateResult Updater::updateFromNetwork(bool amneziaRunning, int timeoutMs)
+UpdateResult Updater::updateFromNetwork(int timeoutMs)
 {
     QString error;
     State state;
@@ -563,7 +563,7 @@ UpdateResult Updater::updateFromNetwork(bool amneziaRunning, int timeoutMs)
     const QByteArray body = reply->readAll();
     const QString etag = QString::fromUtf8(reply->rawHeader("ETag"));
     reply->deleteLater();
-    return updateFromBytes(body, amneziaRunning, etag);
+    return updateFromBytes(body, isAmneziaRunning(), etag);
 }
 
 bool Updater::isAmneziaRunning()
