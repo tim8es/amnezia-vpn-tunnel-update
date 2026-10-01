@@ -8,6 +8,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFile>
+#include <QCoreApplication>
+#include <QProcess>
 #include <QSettings>
 #include <QTemporaryDir>
 
@@ -226,6 +228,42 @@ private slots:
 
         QCOMPARE(result.status, UpdateStatus::Updated);
         QVERIFY(settings.exceptSites().contains(QStringLiteral("first.ru")));
+    }
+
+    void windowsNetworkUpdateStopsBeforeHttpWhenAmneziaRuns()
+    {
+#ifdef Q_OS_WIN
+        const QString helper = QDir(QCoreApplication::applicationDirPath())
+                                   .filePath(QStringLiteral("AmneziaVPN.exe"));
+        QVERIFY2(QFile::exists(helper), qPrintable(helper));
+
+        QProcess process;
+        process.start(helper);
+        QVERIFY2(process.waitForStarted(3000), qPrintable(process.errorString()));
+        QTRY_VERIFY_WITH_TIMEOUT(Updater::isAmneziaRunning(), 3000);
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
+        initializeSettings(settingsPath);
+
+        StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        AmneziaSettings settings(settingsPath);
+        Updater updater(settings, store);
+
+        QElapsedTimer timer;
+        timer.start();
+        const UpdateResult result = updater.updateFromNetwork(100);
+        QCOMPARE(result.status, UpdateStatus::AmneziaRunning);
+        QVERIFY2(timer.elapsed() < 1000, "Running-Amnezia preflight should return before HTTP.");
+
+        process.terminate();
+        if (!process.waitForFinished(3000))
+            process.kill();
+        process.waitForFinished(3000);
+#else
+        QSKIP("Windows-only process detection integration test");
+#endif
     }
 
     void suspiciousShrinkNeverTouchesSettings()
