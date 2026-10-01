@@ -16,6 +16,10 @@ add_library(amnezia_tunnel_update_core
 target_link_libraries(amnezia_tunnel_update_core PUBLIC Qt6::Core Qt6::Network)
 target_include_directories(amnezia_tunnel_update_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+if(WIN32)
+    target_link_libraries(amnezia_tunnel_update_core PUBLIC Rstrtmgr)
+endif()
+
 add_executable(amnezia-vpn-tunnel-update WIN32 MACOSX_BUNDLE src/main.cpp)
 target_link_libraries(amnezia-vpn-tunnel-update PRIVATE amnezia_tunnel_update_core Qt6::Widgets Qt6::Concurrent)
 set_target_properties(amnezia-vpn-tunnel-update PROPERTIES
