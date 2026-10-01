@@ -25,6 +25,7 @@
 #ifdef Q_OS_WIN
 #define NOMINMAX
 #include <windows.h>
+#include <restartmanager.h>
 #include <tlhelp32.h>
 #endif
 
@@ -88,23 +89,6 @@ bool findWindowsAmneziaProcess(WindowsProcessInfo &out, bool *queryOk = nullptr)
     return true;
 }
 
-struct CloseWindowContext {
-    DWORD pid = 0;
-    bool sent = false;
-};
-
-BOOL CALLBACK closeWindowsForProcess(HWND hwnd, LPARAM param)
-{
-    auto *context = reinterpret_cast<CloseWindowContext *>(param);
-    DWORD ownerPid = 0;
-    GetWindowThreadProcessId(hwnd, &ownerPid);
-    if (ownerPid != context->pid)
-        return TRUE;
-
-    if (PostMessageW(hwnd, WM_CLOSE, 0, 0))
-        context->sent = true;
-    return TRUE;
-}
 #endif
 
 QString normalizeHostname(QString hostname)
@@ -743,28 +727,42 @@ bool AmneziaProcess::stopForRestart(QString &restartTarget, QString &error, int 
     }
 
     const HANDLE process =
-        OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processInfo.pid);
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, processInfo.pid);
     if (!process) {
         error = QStringLiteral("Could not open the Amnezia VPN process for restart.");
         return false;
     }
 
-    CloseWindowContext context;
-    context.pid = processInfo.pid;
-
-    QElapsedTimer windowTimer;
-    windowTimer.start();
-    do {
-        context.sent = false;
-        EnumWindows(closeWindowsForProcess, reinterpret_cast<LPARAM>(&context));
-        if (context.sent)
-            break;
-        QThread::msleep(50);
-    } while (windowTimer.elapsed() < qMin(qMax(timeoutMs, 0), 2000));
-
-    if (!context.sent) {
+    FILETIME creationTime{}, exitTime{}, kernelTime{}, userTime{};
+    if (!GetProcessTimes(process, &creationTime, &exitTime, &kernelTime, &userTime)) {
         CloseHandle(process);
-        error = QStringLiteral("Could not ask Amnezia VPN to close gracefully.");
+        error = QStringLiteral("Could not read the Amnezia VPN process start time.");
+        return false;
+    }
+
+    DWORD sessionHandle = 0;
+    WCHAR sessionKey[CCH_RM_SESSION_KEY + 1] = {};
+    DWORD rmResult = RmStartSession(&sessionHandle, 0, sessionKey);
+    if (rmResult != ERROR_SUCCESS) {
+        CloseHandle(process);
+        error = QStringLiteral("Windows Restart Manager could not start (error %1).")
+                    .arg(rmResult);
+        return false;
+    }
+
+    RM_UNIQUE_PROCESS app{};
+    app.dwProcessId = processInfo.pid;
+    app.ProcessStartTime = creationTime;
+
+    rmResult = RmRegisterResources(sessionHandle, 0, nullptr, 1, &app, 0, nullptr);
+    if (rmResult == ERROR_SUCCESS)
+        rmResult = RmShutdown(sessionHandle, 0, nullptr); // never force-kill
+    RmEndSession(sessionHandle);
+
+    if (rmResult != ERROR_SUCCESS) {
+        CloseHandle(process);
+        error = QStringLiteral("Windows could not close Amnezia VPN cleanly (error %1).")
+                    .arg(rmResult);
         return false;
     }
 
