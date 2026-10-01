@@ -4,7 +4,6 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
@@ -18,7 +17,6 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
-#include <QThread>
 #include <QTimer>
 #include <QUrl>
 
@@ -412,24 +410,6 @@ bool Updater::setSourceUrl(const QString &url, QString &error)
     return m_stateStore.save(state, error);
 }
 
-bool Updater::markSkipped(const QString &sha256, const QString &etag, QString &error)
-{
-    if (sha256.isEmpty()) {
-        error = QStringLiteral("Cannot skip an update without a source checksum.");
-        return false;
-    }
-
-    State state;
-    if (!m_stateStore.load(state, error))
-        return false;
-
-    state.skippedSha256 = sha256;
-    if (!etag.isEmpty())
-        state.etag = etag;
-    m_stateStore.clearPending();
-    return m_stateStore.save(state, error);
-}
-
 UpdateResult Updater::applyParsed(const QByteArray &sourceJson,
                                   const ParsedList &parsed,
                                   State state,
@@ -476,7 +456,7 @@ UpdateResult Updater::applyParsed(const QByteArray &sourceJson,
 }
 
 UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunning,
-                                      const QString &etag, bool respectSkipped)
+                                      const QString &etag)
 {
     ParsedList parsed;
     QString error;
@@ -504,20 +484,22 @@ UpdateResult Updater::updateFromBytes(const QByteArray &json, bool amneziaRunnin
         return {UpdateStatus::Unchanged, QStringLiteral("The list is already up to date."),
                 static_cast<int>(parsed.sites.size()), hash, etag};
 
-    if (respectSkipped && hash == state.skippedSha256)
-        return {UpdateStatus::Skipped, QStringLiteral("This list version was previously skipped."),
-                static_cast<int>(parsed.sites.size()), hash, etag};
-
     if (amneziaRunning)
-        return {UpdateStatus::RestartRequired,
-                QStringLiteral("Amnezia VPN must be restarted before applying this list."),
-                static_cast<int>(parsed.sites.size()), hash, etag, json};
+        return {UpdateStatus::AmneziaRunning,
+                QStringLiteral("Amnezia VPN is running. Close it and retry the update."),
+                static_cast<int>(parsed.sites.size()), hash, etag};
 
     return applyParsed(json, parsed, state, etag);
 }
 
-UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
+UpdateResult Updater::updateFromNetwork(int timeoutMs)
 {
+    if (isAmneziaRunning()) {
+        return {UpdateStatus::AmneziaRunning,
+                QStringLiteral("Amnezia VPN is running. Close it and retry the update."),
+                0};
+    }
+
     QString error;
     State state;
     if (!m_stateStore.load(state, error))
@@ -531,9 +513,7 @@ UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.3");
-    const bool skippedVersionPending =
-        !state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256;
-    if (!state.etag.isEmpty() && (respectSkipped || !skippedVersionPending))
+    if (!state.etag.isEmpty())
         request.setRawHeader("If-None-Match", state.etag.toUtf8());
 
     QNetworkReply *reply = manager.get(request);
@@ -555,9 +535,6 @@ UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
         reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (httpStatus == 304) {
         reply->deleteLater();
-        if (!state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256)
-            return {UpdateStatus::Skipped, QStringLiteral("This list version was previously skipped."), 0,
-                    state.skippedSha256, state.etag};
         return {UpdateStatus::Unchanged, QStringLiteral("The list is already up to date."), 0,
                 state.sourceSha256, state.etag};
     }
@@ -572,7 +549,9 @@ UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
     const QByteArray body = reply->readAll();
     const QString etag = QString::fromUtf8(reply->rawHeader("ETag"));
     reply->deleteLater();
-    return updateFromBytes(body, isAmneziaRunning(), etag, respectSkipped);
+
+    // Amnezia could have been started while the request was in flight.
+    return updateFromBytes(body, isAmneziaRunning(), etag);
 }
 
 bool Updater::isAmneziaRunning()
@@ -605,118 +584,6 @@ bool Updater::isAmneziaRunning()
         return true;
     return process.exitCode() == 0;
 #endif
-}
-
-bool AmneziaProcess::stopForRestart(QString &restartTarget, QString &error, int timeoutMs)
-{
-#ifdef Q_OS_WIN
-    QProcess pathLookup;
-    pathLookup.start(QStringLiteral("powershell.exe"),
-                     {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
-                      QStringLiteral("-Command"),
-                      QStringLiteral("(Get-Process -Name AmneziaVPN -ErrorAction SilentlyContinue | "
-                                     "Select-Object -First 1 -ExpandProperty Path)")});
-    if (pathLookup.waitForFinished(4000) && pathLookup.exitCode() == 0)
-        restartTarget = QString::fromLocal8Bit(pathLookup.readAllStandardOutput()).trimmed();
-
-    if (restartTarget.isEmpty()) {
-        const QStringList candidates = {
-            qEnvironmentVariable("ProgramFiles") + QStringLiteral("/AmneziaVPN/AmneziaVPN.exe"),
-            qEnvironmentVariable("ProgramFiles(x86)") + QStringLiteral("/AmneziaVPN/AmneziaVPN.exe")
-        };
-        for (const QString &candidate : candidates) {
-            if (!candidate.startsWith('/') && QFileInfo::exists(candidate)) {
-                restartTarget = QDir::cleanPath(candidate);
-                break;
-            }
-        }
-    }
-
-    if (restartTarget.isEmpty()) {
-        error = QStringLiteral("Could not determine the Amnezia VPN executable path.");
-        return false;
-    }
-
-    QProcess quit;
-    quit.start(QStringLiteral("taskkill"),
-               {QStringLiteral("/IM"), QStringLiteral("AmneziaVPN.exe")});
-    if (!quit.waitForFinished(5000) && Updater::isAmneziaRunning()) {
-        error = QStringLiteral("Timed out while asking Amnezia VPN to close.");
-        return false;
-    }
-#elif defined(Q_OS_MACOS)
-    restartTarget = QStringLiteral("AmneziaVPN");
-    QProcess quit;
-    quit.start(QStringLiteral("/usr/bin/osascript"),
-               {QStringLiteral("-e"), QStringLiteral("tell application \"AmneziaVPN\" to quit")});
-    if (!quit.waitForFinished(5000) && Updater::isAmneziaRunning()) {
-        error = QStringLiteral("Timed out while asking Amnezia VPN to quit.");
-        return false;
-    }
-#else
-    QProcess pidLookup;
-    pidLookup.start(QStringLiteral("pgrep"),
-                    {QStringLiteral("-x"), QStringLiteral("AmneziaVPN")});
-    if (pidLookup.waitForFinished(3000) && pidLookup.exitCode() == 0) {
-        const QString pid = QString::fromLocal8Bit(pidLookup.readLine()).trimmed();
-        if (!pid.isEmpty())
-            restartTarget = QFileInfo(QStringLiteral("/proc/%1/exe").arg(pid)).symLinkTarget();
-    }
-
-    if (restartTarget.isEmpty())
-        restartTarget = QStandardPaths::findExecutable(QStringLiteral("AmneziaVPN"));
-
-    if (restartTarget.isEmpty()) {
-        for (const QString &candidate : {
-                 QStringLiteral("/usr/local/bin/AmneziaVPN"),
-                 QStringLiteral("/opt/AmneziaVPN/bin/AmneziaVPN")}) {
-            if (QFileInfo::exists(candidate)) {
-                restartTarget = candidate;
-                break;
-            }
-        }
-    }
-
-    if (restartTarget.isEmpty()) {
-        error = QStringLiteral("Could not determine the Amnezia VPN executable path.");
-        return false;
-    }
-
-    QProcess quit;
-    quit.start(QStringLiteral("pkill"),
-               {QStringLiteral("-TERM"), QStringLiteral("-x"), QStringLiteral("AmneziaVPN")});
-    if (!quit.waitForFinished(5000) && Updater::isAmneziaRunning()) {
-        error = QStringLiteral("Timed out while asking Amnezia VPN to close.");
-        return false;
-    }
-#endif
-
-    QElapsedTimer timer;
-    timer.start();
-    while (Updater::isAmneziaRunning()) {
-        if (timer.elapsed() >= timeoutMs) {
-            error = QStringLiteral("Amnezia VPN did not close in time. The update was not applied.");
-            return false;
-        }
-        QThread::msleep(250);
-    }
-    return true;
-}
-
-bool AmneziaProcess::startAfterRestart(const QString &restartTarget, QString &error)
-{
-    bool started = false;
-#ifdef Q_OS_MACOS
-    started = QProcess::startDetached(QStringLiteral("/usr/bin/open"),
-                                      {QStringLiteral("-a"), restartTarget});
-#else
-    started = QProcess::startDetached(restartTarget, {});
-#endif
-    if (!started) {
-        error = QStringLiteral("The list was processed, but Amnezia VPN could not be started again.");
-        return false;
-    }
-    return true;
 }
 
 bool Scheduler::install(const QString &programPath, QString &error)
