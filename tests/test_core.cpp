@@ -175,7 +175,7 @@ private slots:
         QVERIFY(!QDir(store.backupDir()).exists());
     }
 
-    void runningAmneziaRequestsRestartWithoutWritingSettings()
+    void runningAmneziaBlocksWriteUntilManualRetry()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
@@ -188,50 +188,44 @@ private slots:
         AmneziaSettings settings(settingsPath);
         Updater updater(settings, store);
 
-        const UpdateResult result =
-            updater.updateFromBytes(listJson({QStringLiteral("new.ru")}), true, QStringLiteral("etag-1"));
-        QCOMPARE(result.status, UpdateStatus::RestartRequired);
-        QVERIFY(!result.sourceSha256.isEmpty());
-        QCOMPARE(result.etag, QStringLiteral("etag-1"));
-        QVERIFY(!result.sourceJson.isEmpty());
-        QVERIFY(!QFile::exists(store.pendingPath()));
+        const QByteArray source = listJson({QStringLiteral("new.ru")});
+        const UpdateResult blocked =
+            updater.updateFromBytes(source, true, QStringLiteral("etag-1"));
+        QCOMPARE(blocked.status, UpdateStatus::AmneziaRunning);
         QVERIFY(!settings.exceptSites().contains(QStringLiteral("new.ru")));
+        QVERIFY(settings.exceptSites().contains(QStringLiteral("personal.ru")));
+
+        const UpdateResult retried =
+            updater.updateFromBytes(source, false, QStringLiteral("etag-1"));
+        QCOMPARE(retried.status, UpdateStatus::Updated);
+        QVERIFY(settings.exceptSites().contains(QStringLiteral("new.ru")));
         QVERIFY(settings.exceptSites().contains(QStringLiteral("personal.ru")));
     }
 
-    void skippedVersionStaysSkippedUntilHashChanges()
+    void legacySkippedHashDoesNotBlockRetry()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         const QString settingsPath = QDir(temp.path()).filePath(QStringLiteral("amnezia.ini"));
         initializeSettings(settingsPath);
 
+        const QByteArray source = listJson({QStringLiteral("first.ru")});
+        ParsedList parsed;
+        QString error;
+        QVERIFY2(ListCodec::parse(source, parsed, error), qPrintable(error));
+
         StateStore store(QDir(temp.path()).filePath(QStringLiteral("state")));
+        State state;
+        state.skippedSha256 = QString::fromLatin1(parsed.sha256);
+        QVERIFY2(store.save(state, error), qPrintable(error));
+
         AmneziaSettings settings(settingsPath);
         Updater updater(settings, store);
+        const UpdateResult result =
+            updater.updateFromBytes(source, false, QStringLiteral("etag-1"));
 
-        const QByteArray first = listJson({QStringLiteral("first.ru")});
-        const UpdateResult available =
-            updater.updateFromBytes(first, true, QStringLiteral("etag-1"));
-        QCOMPARE(available.status, UpdateStatus::RestartRequired);
-
-        QString error;
-        QVERIFY2(updater.markSkipped(available.sourceSha256, available.etag, error), qPrintable(error));
-
-        const UpdateResult same =
-            updater.updateFromBytes(first, true, QStringLiteral("etag-1"));
-        QCOMPARE(same.status, UpdateStatus::Skipped);
-
-        const UpdateResult manualRetry =
-            updater.updateFromBytes(first, true, QStringLiteral("etag-1"), false);
-        QCOMPARE(manualRetry.status, UpdateStatus::RestartRequired);
-        QCOMPARE(manualRetry.sourceSha256, available.sourceSha256);
-        QVERIFY(!manualRetry.sourceJson.isEmpty());
-
-        const UpdateResult newer =
-            updater.updateFromBytes(listJson({QStringLiteral("second.ru")}), true, QStringLiteral("etag-2"));
-        QCOMPARE(newer.status, UpdateStatus::RestartRequired);
-        QVERIFY(newer.sourceSha256 != available.sourceSha256);
+        QCOMPARE(result.status, UpdateStatus::Updated);
+        QVERIFY(settings.exceptSites().contains(QStringLiteral("first.ru")));
     }
 
     void suspiciousShrinkNeverTouchesSettings()
