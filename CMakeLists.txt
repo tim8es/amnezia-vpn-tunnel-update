@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(amnezia_vpn_tunnel_update VERSION 0.2.3 LANGUAGES CXX)
+project(amnezia_vpn_tunnel_update VERSION 0.2.4 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,6 +16,10 @@ add_library(amnezia_tunnel_update_core
 target_link_libraries(amnezia_tunnel_update_core PUBLIC Qt6::Core Qt6::Network)
 target_include_directories(amnezia_tunnel_update_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+if(WIN32)
+    target_link_libraries(amnezia_tunnel_update_core PUBLIC Rstrtmgr)
+endif()
+
 add_executable(amnezia-vpn-tunnel-update WIN32 MACOSX_BUNDLE src/main.cpp)
 target_link_libraries(amnezia-vpn-tunnel-update PRIVATE amnezia_tunnel_update_core Qt6::Widgets Qt6::Concurrent)
 set_target_properties(amnezia-vpn-tunnel-update PROPERTIES
@@ -29,4 +33,10 @@ if(BUILD_TESTING)
     add_executable(amnezia-vpn-tunnel-update-tests tests/test_core.cpp)
     target_link_libraries(amnezia-vpn-tunnel-update-tests PRIVATE amnezia_tunnel_update_core Qt6::Test)
     add_test(NAME amnezia-vpn-tunnel-update-tests COMMAND amnezia-vpn-tunnel-update-tests)
+
+    if(WIN32)
+        add_executable(AmneziaVPN tests/fake_amnezia.cpp)
+        target_link_libraries(AmneziaVPN PRIVATE user32)
+        add_dependencies(amnezia-vpn-tunnel-update-tests AmneziaVPN)
+    endif()
 endif()

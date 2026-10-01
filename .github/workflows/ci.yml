@@ -46,8 +46,20 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
+      - name: Test Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .\\build\\Release\\amnezia-vpn-tunnel-update-tests.exe -v2 -o qt-test-output.txt,txt
+          $testExit = $LASTEXITCODE
+          if (Test-Path qt-test-output.txt) {
+            Get-Content qt-test-output.txt
+          }
+          exit $testExit
+
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        if: runner.os != 'Windows'
+        run: ctest --test-dir build -C Release --output-on-failure --verbose
 
       - name: Validate built-in upstream lists
         if: runner.os == 'Linux'

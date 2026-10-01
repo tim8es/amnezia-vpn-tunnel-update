@@ -6,6 +6,21 @@ The project follows [Semantic Versioning](https://semver.org/) for tagged releas
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-01
+
+### Changed
+
+- GUI source checks now use an asynchronous Qt network state machine with a hard timeout.
+- Manual updates detect a running Amnezia VPN before starting the network request.
+- Windows restart handling now uses Windows Restart Manager instead of treating a window close as application exit.
+- Restart prompts are shown inline in the updater window.
+
+### Fixed
+
+- Fixed the updater remaining indefinitely on “Checking list…” in the reported Windows running-client scenario.
+- Added Windows integration coverage for detecting, gracefully stopping, and restarting an Amnezia-like GUI process that ignores ordinary window close.
+- Added deterministic HTTP 200, 304, and hanging-request timeout tests.
+
 ## [0.2.3] - 2026-09-30
 
 ### Fixed

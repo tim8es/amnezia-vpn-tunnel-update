@@ -25,6 +25,7 @@
 #ifdef Q_OS_WIN
 #define NOMINMAX
 #include <windows.h>
+#include <restartmanager.h>
 #include <tlhelp32.h>
 #endif
 
@@ -34,6 +35,61 @@
 
 namespace AmneziaUpdater {
 namespace {
+
+#ifdef Q_OS_WIN
+struct WindowsProcessInfo {
+    DWORD pid = 0;
+    QString path;
+};
+
+bool findWindowsAmneziaProcess(WindowsProcessInfo &out, bool *queryOk = nullptr)
+{
+    if (queryOk)
+        *queryOk = false;
+
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return false;
+
+    if (queryOk)
+        *queryOk = true;
+
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (QString::fromWCharArray(entry.szExeFile)
+                    .compare(QStringLiteral("AmneziaVPN.exe"), Qt::CaseInsensitive) != 0) {
+                continue;
+            }
+
+            out.pid = entry.th32ProcessID;
+            found = true;
+            break;
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+
+    if (!found)
+        return false;
+
+    const HANDLE process =
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, out.pid);
+    if (process) {
+        wchar_t buffer[32768];
+        DWORD size = static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0]));
+        if (QueryFullProcessImageNameW(process, 0, buffer, &size))
+            out.path = QString::fromWCharArray(buffer, static_cast<int>(size));
+        CloseHandle(process);
+    }
+
+    return true;
+}
+
+#endif
 
 QString normalizeHostname(QString hostname)
 {
@@ -356,6 +412,67 @@ bool AmneziaSettings::splitTunnelingEnabled() const
     return m_settings->value(QStringLiteral("Conf/sitesSplitTunnelingEnabled"), false).toBool();
 }
 
+NetworkFetcher::NetworkFetcher(QObject *parent)
+    : QObject(parent)
+{
+}
+
+void NetworkFetcher::fetch(const QString &url, const QString &etag, int timeoutMs)
+{
+    QNetworkRequest request{QUrl(url)};
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/gui");
+    if (!etag.isEmpty())
+        request.setRawHeader("If-None-Match", etag.toUtf8());
+
+    QNetworkReply *reply = m_manager.get(request);
+    auto *timer = new QTimer(reply);
+    timer->setSingleShot(true);
+
+    QObject::connect(timer, &QTimer::timeout, reply, [this, reply]() {
+        if (reply->isFinished())
+            return;
+        reply->setProperty("amneziaUpdaterTimedOut", true);
+        reply->abort();
+        emit finished(false, false, {}, {}, QStringLiteral("Download timed out."));
+    });
+
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, timer]() {
+        timer->stop();
+
+        if (reply->property("amneziaUpdaterTimedOut").toBool()) {
+            reply->deleteLater();
+            return;
+        }
+
+        const int httpStatus =
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+        if (httpStatus == 304) {
+            const QString responseEtag = QString::fromUtf8(reply->rawHeader("ETag"));
+            emit finished(true, true, {}, responseEtag, {});
+            reply->deleteLater();
+            return;
+        }
+
+        if (reply->error() != QNetworkReply::NoError || httpStatus != 200) {
+            const QString message = QStringLiteral("Download failed (HTTP %1): %2")
+                                        .arg(httpStatus).arg(reply->errorString());
+            emit finished(false, false, {}, {}, message);
+            reply->deleteLater();
+            return;
+        }
+
+        const QByteArray body = reply->readAll();
+        const QString responseEtag = QString::fromUtf8(reply->rawHeader("ETag"));
+        emit finished(true, false, body, responseEtag, {});
+        reply->deleteLater();
+    });
+
+    timer->start(timeoutMs);
+}
+
 Updater::Updater(AmneziaSettings &settings, StateStore &stateStore, QObject *parent)
     : QObject(parent), m_settings(settings), m_stateStore(stateStore)
 {
@@ -530,7 +647,7 @@ UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
     QNetworkRequest request(QUrl(state.sourceUrl));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.3");
+    request.setRawHeader("User-Agent", "amnezia-vpn-tunnel-update/0.2.4");
     const bool skippedVersionPending =
         !state.skippedSha256.isEmpty() && state.skippedSha256 != state.sourceSha256;
     if (!state.etag.isEmpty() && (respectSkipped || !skippedVersionPending))
@@ -578,26 +695,10 @@ UpdateResult Updater::updateFromNetwork(bool respectSkipped, int timeoutMs)
 bool Updater::isAmneziaRunning()
 {
 #ifdef Q_OS_WIN
-    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE)
-        return true; // conservative: never write when process state is unknown
-
-    PROCESSENTRY32W entry{};
-    entry.dwSize = sizeof(entry);
-    bool running = false;
-
-    if (Process32FirstW(snapshot, &entry)) {
-        do {
-            if (QString::fromWCharArray(entry.szExeFile)
-                    .compare(QStringLiteral("AmneziaVPN.exe"), Qt::CaseInsensitive) == 0) {
-                running = true;
-                break;
-            }
-        } while (Process32NextW(snapshot, &entry));
-    }
-
-    CloseHandle(snapshot);
-    return running;
+    WindowsProcessInfo process;
+    bool queryOk = false;
+    const bool found = findWindowsAmneziaProcess(process, &queryOk);
+    return !queryOk || found; // conservative when process enumeration fails
 #else
     QProcess process;
     process.start(QStringLiteral("pgrep"), {QStringLiteral("-x"), QStringLiteral("AmneziaVPN")});
@@ -610,40 +711,71 @@ bool Updater::isAmneziaRunning()
 bool AmneziaProcess::stopForRestart(QString &restartTarget, QString &error, int timeoutMs)
 {
 #ifdef Q_OS_WIN
-    QProcess pathLookup;
-    pathLookup.start(QStringLiteral("powershell.exe"),
-                     {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
-                      QStringLiteral("-Command"),
-                      QStringLiteral("(Get-Process -Name AmneziaVPN -ErrorAction SilentlyContinue | "
-                                     "Select-Object -First 1 -ExpandProperty Path)")});
-    if (pathLookup.waitForFinished(4000) && pathLookup.exitCode() == 0)
-        restartTarget = QString::fromLocal8Bit(pathLookup.readAllStandardOutput()).trimmed();
-
-    if (restartTarget.isEmpty()) {
-        const QStringList candidates = {
-            qEnvironmentVariable("ProgramFiles") + QStringLiteral("/AmneziaVPN/AmneziaVPN.exe"),
-            qEnvironmentVariable("ProgramFiles(x86)") + QStringLiteral("/AmneziaVPN/AmneziaVPN.exe")
-        };
-        for (const QString &candidate : candidates) {
-            if (!candidate.startsWith('/') && QFileInfo::exists(candidate)) {
-                restartTarget = QDir::cleanPath(candidate);
-                break;
-            }
-        }
+    WindowsProcessInfo processInfo;
+    bool queryOk = false;
+    if (!findWindowsAmneziaProcess(processInfo, &queryOk)) {
+        error = queryOk
+            ? QStringLiteral("Amnezia VPN is not running.")
+            : QStringLiteral("Could not inspect running processes.");
+        return false;
     }
 
+    restartTarget = processInfo.path;
     if (restartTarget.isEmpty()) {
         error = QStringLiteral("Could not determine the Amnezia VPN executable path.");
         return false;
     }
 
-    QProcess quit;
-    quit.start(QStringLiteral("taskkill"),
-               {QStringLiteral("/IM"), QStringLiteral("AmneziaVPN.exe")});
-    if (!quit.waitForFinished(5000) && Updater::isAmneziaRunning()) {
-        error = QStringLiteral("Timed out while asking Amnezia VPN to close.");
+    const HANDLE process =
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, processInfo.pid);
+    if (!process) {
+        error = QStringLiteral("Could not open the Amnezia VPN process for restart.");
         return false;
     }
+
+    FILETIME creationTime{}, exitTime{}, kernelTime{}, userTime{};
+    if (!GetProcessTimes(process, &creationTime, &exitTime, &kernelTime, &userTime)) {
+        CloseHandle(process);
+        error = QStringLiteral("Could not read the Amnezia VPN process start time.");
+        return false;
+    }
+
+    DWORD sessionHandle = 0;
+    WCHAR sessionKey[CCH_RM_SESSION_KEY + 1] = {};
+    DWORD rmResult = RmStartSession(&sessionHandle, 0, sessionKey);
+    if (rmResult != ERROR_SUCCESS) {
+        CloseHandle(process);
+        error = QStringLiteral("Windows Restart Manager could not start (error %1).")
+                    .arg(rmResult);
+        return false;
+    }
+
+    RM_UNIQUE_PROCESS app{};
+    app.dwProcessId = processInfo.pid;
+    app.ProcessStartTime = creationTime;
+
+    rmResult = RmRegisterResources(sessionHandle, 0, nullptr, 1, &app, 0, nullptr);
+    if (rmResult == ERROR_SUCCESS)
+        rmResult = RmShutdown(sessionHandle, 0, nullptr); // never force-kill
+    RmEndSession(sessionHandle);
+
+    if (rmResult != ERROR_SUCCESS) {
+        CloseHandle(process);
+        error = QStringLiteral("Windows could not close Amnezia VPN cleanly (error %1).")
+                    .arg(rmResult);
+        return false;
+    }
+
+    const DWORD waitResult =
+        WaitForSingleObject(process, static_cast<DWORD>(qMax(timeoutMs, 0)));
+    CloseHandle(process);
+
+    if (waitResult != WAIT_OBJECT_0) {
+        error = QStringLiteral("Amnezia VPN did not close in time. The update was not applied.");
+        return false;
+    }
+
+    return true;
 #elif defined(Q_OS_MACOS)
     restartTarget = QStringLiteral("AmneziaVPN");
     QProcess quit;
