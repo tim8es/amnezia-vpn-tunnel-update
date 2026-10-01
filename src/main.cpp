@@ -248,7 +248,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("tim8es"));
     QCoreApplication::setApplicationName(QStringLiteral("amnezia-vpn-tunnel-update"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.3-test-running-flow"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.4"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -349,11 +349,11 @@ int main(int argc, char *argv[])
     }
 
     QWidget window;
-    window.setWindowTitle(QStringLiteral("Amnezia VPN Tunnel Update — TEST BUILD"));
+    window.setWindowTitle(QStringLiteral("Amnezia VPN Tunnel Update"));
     window.setMinimumWidth(520);
 
     auto *layout = new QVBoxLayout(&window);
-    auto *title = new QLabel(QStringLiteral("<b>Amnezia VPN Tunnel Update — TEST BUILD</b>"));
+    auto *title = new QLabel(QStringLiteral("<b>Amnezia VPN Tunnel Update</b>"));
     auto *description = new QLabel(
         QStringLiteral("Автоматически поддерживает список split tunneling Amnezia VPN в актуальном состоянии."));
     description->setWordWrap(true);
