@@ -35,8 +35,7 @@ struct State {
 enum class UpdateStatus {
     Updated,
     Unchanged,
-    RestartRequired,
-    Skipped,
+    AmneziaRunning,
     Error
 };
 
@@ -46,7 +45,6 @@ struct UpdateResult {
     int managedCount = 0;
     QString sourceSha256;
     QString etag;
-    QByteArray sourceJson;
 };
 
 class ListCodec {
@@ -100,12 +98,11 @@ public:
 
     QString sourceUrl() const;
     bool setSourceUrl(const QString &url, QString &error);
-    bool markSkipped(const QString &sha256, const QString &etag, QString &error);
     static bool validateSourceUrl(const QString &url, QString &normalizedUrl, QString &error);
 
     UpdateResult updateFromBytes(const QByteArray &json, bool amneziaRunning,
-                                 const QString &etag = {}, bool respectSkipped = true);
-    UpdateResult updateFromNetwork(bool respectSkipped = true, int timeoutMs = 20000);
+                                 const QString &etag = {});
+    UpdateResult updateFromNetwork(int timeoutMs = 20000);
 
     static bool isAmneziaRunning();
 
@@ -116,12 +113,6 @@ private:
                              const QString &etag);
     AmneziaSettings &m_settings;
     StateStore &m_stateStore;
-};
-
-class AmneziaProcess {
-public:
-    static bool stopForRestart(QString &restartTarget, QString &error, int timeoutMs = 15000);
-    static bool startAfterRestart(const QString &restartTarget, QString &error);
 };
 
 class Scheduler {
