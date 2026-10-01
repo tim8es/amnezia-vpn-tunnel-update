@@ -7,7 +7,16 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 {
     switch (message) {
     case WM_CLOSE:
-        DestroyWindow(hwnd);
+        // Mirror Amnezia: closing the window does not quit the process.
+        ShowWindow(hwnd, SW_HIDE);
+        return 0;
+    case WM_QUERYENDSESSION:
+        return TRUE;
+    case WM_ENDSESSION:
+        if (wParam && (lParam & ENDSESSION_CLOSEAPP)) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
         return 0;
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -41,6 +50,8 @@ int main()
 
     if (!window)
         return 3;
+
+    ShowWindow(window, SW_SHOW);
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
