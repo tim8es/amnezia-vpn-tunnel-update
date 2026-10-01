@@ -4,7 +4,6 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
@@ -18,7 +17,6 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
-#include <QThread>
 #include <QTimer>
 #include <QUrl>
 
