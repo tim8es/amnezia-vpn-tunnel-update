@@ -4,6 +4,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
